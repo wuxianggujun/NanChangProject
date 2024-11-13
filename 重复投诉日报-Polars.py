@@ -5,6 +5,15 @@ from tool.file import FileManager
 from tqdm import tqdm
 
 
+##
+
+##我还需要排序一下，就是让重复投诉内容按照重复投诉次数大的排序。比如抚州两个号码出现投诉多次，一个3次一个2次，那先把三次排在前面
+## 新增时间列
+##
+
+def extract_address_and_issue(complaint_content):
+    return "", ""
+
 def process_excel(df: pl.DataFrame) -> tuple:
     now_time = dt.datetime.now()
     start_time = (now_time - dt.timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -23,10 +32,17 @@ def process_excel(df: pl.DataFrame) -> tuple:
     # 通过客服流水号进行去重
     dataframe = dataframe.unique(subset=["客服流水号"])
 
+    # dataframe = dataframe.with_columns(
+    #     pl.col("系统接单时间").dt.strftime("%Y/%m/%d %H").alias("系统接单时间2")
+    # )
+
+    # 创建新的列 "系统接单时间2"
     dataframe = dataframe.with_columns(
         pl.col("系统接单时间").dt.strftime("%Y/%m/%d %H").alias("系统接单时间2")
     )
-
+    
+    print(dataframe.columns)
+    
     if '口碑未达情况原因' in dataframe.columns:
         column_index = dataframe.columns.index('口碑未达情况原因')
         dataframe = dataframe.select(dataframe.columns[:column_index + 1])
@@ -58,7 +74,59 @@ def process_excel(df: pl.DataFrame) -> tuple:
 
     result_df = result_df.join(repeat_counts, on="区域-受理号码", how="left")
 
-    return dataframe, filtered_df, result_df
+    filtered_repeat_df = result_df.filter(pl.col("重复投诉次数") >= 2)
+
+    # 按照重复投诉次数降序排序
+    filtered_repeat_df = filtered_repeat_df.sort("重复投诉次数")
+
+    print(filtered_repeat_df.columns)
+    complaint_texts = []
+    region_complaints = {}
+    complaint_numbers = set()  # To track unique complaint numbers
+    
+    # 自定义区域排序
+    region_order = ["南昌", "九江", "上饶", "抚州", "宜春", "吉安", "赣州", "景德镇", "萍乡", "新余", "鹰潭"]
+
+    region_map = {region: idx for idx, region in enumerate(region_order)}
+
+
+    for row in tqdm(filtered_repeat_df.iter_rows(named=True), desc="提取投诉文本"):
+        complaint_number = row["区域-受理号码"]
+        
+        if complaint_number in complaint_numbers:
+            continue
+        
+        complaint_numbers.add(complaint_number)
+        
+        complaint_count = row["重复投诉次数"]
+        complaint_group = result_df.filter(pl.col("区域-受理号码") == complaint_number).sort("系统接单时间")
+
+        text_content = [f"{complaint_number} ({complaint_count}次)"]
+
+        for complaint_row in complaint_group.iter_rows(named=True):
+            complaint_date = complaint_row["系统接单时间"]
+            complaint_date_str = complaint_date.strftime("%m月%d日") if complaint_date else "日期无效"
+            text_content.append(f"{complaint_date_str}投诉：用户来电反映在；")
+
+        complaint_texts.append("\n".join(text_content))
+        
+        # Aggregate complaints by region
+        region = row["区域"].replace("市", "")  # Remove "市" from the region name
+        if region in region_map:
+            region_complaints[region] = region_complaints.get(region, 0) + 1
+
+    # 按照自定义顺序进行排序
+    sorted_regions = sorted(region_complaints.items(), key=lambda x: region_map.get(x[0], float('inf')))
+
+    region_summary = "、".join([f"{region}{count}单" for region, count in sorted_regions])
+
+    # Concatenate all complaint texts into a single string with region summary at the top
+    all_complaints_text = f"总共投诉：{region_summary}\n\n重复投诉内容如下:\n" + "\n".join(complaint_texts)
+
+    # Create a new DataFrame for complaint text
+    text_df = pl.DataFrame({"投诉信息": [all_complaints_text]})
+
+    return dataframe, result_df, text_df
 
 
 if __name__ == '__main__':
@@ -75,17 +143,11 @@ if __name__ == '__main__':
         exit(1)
 
     # 处理数据并获取结果
-    processed_df, filtered_df, result_df = process_excel(df)
+    processed_df, result_df, text_df = process_excel(df)
 
+    file_manager.save_to_sheet("重复投诉日报", 月原始数据=processed_df, 重复投诉结果=result_df,
+                               重复投诉文本=text_df)
 
-    processed_df.write_excel("processed_data.xlsx",autofilter=False)
-   
-    # 保存处理后的数据到文件
-    processed_df.write_csv("processed_data.csv")
-    filtered_df.write_csv("filtered_data.csv")
-    result_df.write_csv("result_data.csv")
-    
-    
     end_time = dt.datetime.now()
     runtime = end_time - start_time
     logging.info(f'运行时间：{runtime}')

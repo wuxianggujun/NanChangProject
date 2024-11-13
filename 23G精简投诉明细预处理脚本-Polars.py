@@ -1,5 +1,5 @@
-import datetime as dt
 import logging
+import datetime as dt
 import os
 import polars as pl
 from tool.file import FileManager
@@ -49,7 +49,7 @@ def process_excel(excel_data: pl.DataFrame, days: int) -> pl.DataFrame:
     if "区域" in filtered_df.columns:
         # 去掉“区域”列中的“市”字
         filtered_df = filtered_df.with_columns(
-            pl.col("区域").str.replace(r"市$", "", literal=True)
+            pl.col("区域").str.replace(r"市", "", literal=True)
         )
 
         # 删除“口碑未达情况原因”右侧的所有列
@@ -84,22 +84,18 @@ if __name__ == '__main__':
     # 读取Excel文件
     try:
         excel_data = pl.read_excel(source_file)
+
+        if excel_data is not None:
+            logging.info("如果本周一，记得修改days参数为3天否则默认为1，表示前一天的数据。")
+
+            processed_df = process_excel(excel_data, days=1)
+            # 假设df1, df2 是你的Polars DataFrame
+            file_manager.save_to_sheet('23G精简投诉明细', sheet1=processed_df)
+        else:
+            logging.error("解析工单查询数据失败")
     except Exception as e:
         logging.error(f"无法读取Excel文件: {e}")
         exit(1)
-
-    if excel_data is not None:
-        logging.info("如果本周一，记得修改days参数为3天否则默认为1，表示前一天的数据。")
-
-        processed_df = process_excel(excel_data, days=1)
-
-        data_str = startTime.strftime("%Y%m%d")
-        output_filename = f"23G精简投诉明细_预处理_{data_str}.xlsx"
-        output_path = os.path.join("WorkDocument", "23G精简投诉明细预处理脚本", output_filename)
-        # 保存处理后的数据到文件
-        processed_df.write_excel(output_path)
-    else:
-        logging.error("解析工单查询数据失败")
 
     end_time = dt.datetime.now()
     logging.info("解析工单查询数据耗时：%s" % (end_time - startTime))

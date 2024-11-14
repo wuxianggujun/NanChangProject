@@ -1,12 +1,13 @@
 import glob
 import os
+import re
 import logging
 import polars as pl
 import datetime as dt
 from typing import AnyStr
 from tqdm import tqdm
 from openpyxl import Workbook, load_workbook
-
+from tool.data import DataUtils
 
 class FileManager:
     def __init__(self, base_dir: str):
@@ -18,12 +19,14 @@ class FileManager:
         """封装写入 Polars DataFrame 到 Excel sheet 的方法"""
         # 将 Polars DataFrame 转为字典列表
         data = df.to_dicts()
-
+        
         # 获取列名
         columns = df.columns
         # 写入列名（header）
         for col_num, col_name in enumerate(columns, start=1):
-            worksheet.cell(row=1, column=col_num, value=col_name)
+            # 去除列名中的后缀（如 网络类型_1 -> 网络类型）
+            cleaned_col_name = re.sub(r"_\d+$", "", col_name)
+            worksheet.cell(row=1, column=col_num, value=cleaned_col_name)
 
         # Add the data to the worksheet
         for row_num, row in tqdm(enumerate(data, start=2), total=len(data), desc="保存数据中"):

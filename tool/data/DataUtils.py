@@ -1,5 +1,5 @@
+import re
 import polars as pl
-
 
 class DataUtils:
 
@@ -20,3 +20,4 @@ class DataUtils:
         return self.dataframe.select(
             self.dataframe.drop(right_col).insert_column(idx, self.dataframe.get_column(right_col))
         )
+     

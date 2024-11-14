@@ -82,7 +82,8 @@ def process_excel(df: pl.DataFrame) -> tuple:
 
     region_map = {region: idx for idx, region in enumerate(region_order)}
 
-
+    region_complaints_data = {} # 用来存储每个区域对应的投诉数据
+    
     for row in filtered_repeat_df.iter_rows(named=True):
         complaint_number = row["区域-受理号码"]
         
@@ -103,8 +104,12 @@ def process_excel(df: pl.DataFrame) -> tuple:
 
         complaint_texts.append("\n".join(text_content))
         
-        # Aggregate complaints by region
+        # 收集每个区域的投诉数据
         region = row["区域"].replace("市", "")  # Remove "市" from the region name
+        if region not in region_complaints_data:
+            region_complaints_data[region] = []
+        region_complaints_data[region].append({"complaint_number": complaint_number, "count": complaint_count, "text": "\n".join(text_content)})
+
         if region in region_map:
             region_complaints[region] = region_complaints.get(region, 0) + 1
 
@@ -113,8 +118,16 @@ def process_excel(df: pl.DataFrame) -> tuple:
 
     region_summary = "、".join([f"{region}{count}单" for region, count in sorted_regions])
 
+    # 排序后的文本内容
+    complaint_texts_sorted = []
+    for region, complaints in sorted_regions:
+        # 每个区域内部按照重复投诉次数降序排序
+        sorted_complaints = sorted(region_complaints_data[region], key=lambda x: x["count"], reverse=True)
+        for complaint in sorted_complaints:
+            complaint_texts_sorted.append(complaint["text"])
+
     # Concatenate all complaint texts into a single string with region summary at the top
-    all_complaints_text = f"总共投诉：{region_summary}\n\n重复投诉内容如下:\n" + "\n".join(complaint_texts)
+    all_complaints_text = f"总共投诉：{region_summary}\n\n重复投诉内容如下:\n" + "\n".join(complaint_texts_sorted)
 
     # Create a new DataFrame for complaint text
     text_df = pl.DataFrame({"投诉信息": [all_complaints_text]})
@@ -138,7 +151,7 @@ if __name__ == '__main__':
     # 处理数据并获取结果
     processed_df, result_df, text_df = process_excel(df)
 
-    file_manager.save_to_sheet("重复投诉日报", 月原始数据=processed_df, 重复投诉结果=result_df,
+    file_manager.save_to_sheet("重复投诉日报", 原始数据=processed_df, 重复投诉结果=result_df,
                                重复投诉文本=text_df)
 
     end_time = dt.datetime.now()

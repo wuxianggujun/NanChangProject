@@ -2,17 +2,10 @@ import logging
 import datetime as dt
 import os
 import polars as pl
-from polars import DataFrame
-
 from tool.file import FileManager
 from tool.data import DataUtils
 import re
 
-
-def remove_repeat_columns(df: pl.DataFrame) -> DataFrame:
-    new_columns = [re.sub(r"_\d+$", "", col) for col in df.columns]
-    df.columns = new_columns
-    return df
 def process_excel(excel_data: pl.DataFrame, days: int) -> pl.DataFrame:
     # 确保“系统接单时间”列的格式为日期时间
     excel_data = excel_data.with_columns(

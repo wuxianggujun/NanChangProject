@@ -67,7 +67,9 @@ def process_excel(df: pl.DataFrame) -> tuple:
     repeat_counts = result_df.group_by("区域-受理号码").agg(pl.len().alias("重复投诉次数"))
 
     result_df = result_df.join(repeat_counts, on="区域-受理号码", how="left")
-
+    # 对地市进行简单排序，放在直接粘贴到重复投诉总表中
+    result_df = result_df.sort("区域")
+    
     filtered_repeat_df = result_df.filter(pl.col("重复投诉次数") >= 2)
 
     # 按照重复投诉次数降序排序

@@ -2,9 +2,16 @@ import logging
 import datetime as dt
 import os
 import polars as pl
+from polars import DataFrame
+
 from tool.file import FileManager
+import re
 
 
+def remove_repeat_columns(df: pl.DataFrame) -> DataFrame:
+    new_columns = [re.sub(r"_\d+$", "", col) for col in df.columns]
+    df.columns = new_columns
+    return df
 def process_excel(excel_data: pl.DataFrame, days: int) -> pl.DataFrame:
     # 确保“系统接单时间”列的格式为日期时间
     excel_data = excel_data.with_columns(
@@ -25,12 +32,22 @@ def process_excel(excel_data: pl.DataFrame, days: int) -> pl.DataFrame:
         pl.col("系统接单时间").dt.date().alias("系统接单时间2")
     )
 
-    # 插入“系统接单时间2”列在“系统接单时间”后面
-    cols = filtered_df.columns
-    idx = cols.index("系统接单时间") + 1
-    cols.insert(idx, cols.pop(-1))  # 把新列放到“系统接单时间”之后
+    # # 插入“系统接单时间2”列在“系统接单时间”后面
+    # cols = filtered_df.columns
+    # idx = cols.index("系统接单时间") + 1
+    # cols.insert(idx, cols.pop(-1))  # 把新列放到“系统接单时间”之后
+    # 
+    # 
+    # filtered_df = filtered_df.select(cols)
 
-    filtered_df = filtered_df.select(cols)
+    # 使用insert_column来提高效率，插入“系统接单时间2”列到“系统接单时间”后面
+    idx = filtered_df.columns.index("系统接单时间") + 1  # 获取“系统接单时间”列的索引位置
+    filtered_df = filtered_df.select(
+        filtered_df.drop("系统接单时间2").insert_column(idx, filtered_df.get_column("系统接单时间2"))
+    )
+
+    # print(filtered_df.columns)
+
     # 删除无用列（如“序号”）
     filtered_df = filtered_df.drop("序号")
     # 去重处理
@@ -87,8 +104,12 @@ if __name__ == '__main__':
 
         if excel_data is not None:
             logging.info("如果本周一，记得修改days参数为3天否则默认为1，表示前一天的数据。")
-
+    
+            print(excel_data.columns)
             processed_df = process_excel(excel_data, days=1)
+            
+            # processed_df =  remove_repeat_columns(processed_df)
+            
             # 假设df1, df2 是你的Polars DataFrame
             file_manager.save_to_sheet('23G精简投诉明细', sheet1=processed_df)
         else:

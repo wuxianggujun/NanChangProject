@@ -6,11 +6,7 @@ from tqdm import tqdm  # 导入tqdm
 import polars as pl
 from openpyxl.reader.excel import load_workbook
 
-
 def process_excel(excel_data_df: pl.DataFrame):
-    # 删除重复记录，基于“客服流水号”
-    excel_data_df = excel_data_df.unique(subset='客服流水号')
-
     # 选择所需的列
     columns_to_keep = ['客服流水号', '受理号码', '区域', '系统接单时间', '月份']
     excel_data_df = excel_data_df.select(columns_to_keep)
@@ -32,12 +28,14 @@ def process_dataframe(main_dataframe:pl.DataFrame):
         main_dataframe = main_dataframe.with_columns(pl.lit(None).cast(pl.Utf8).alias(f"{month}月"))
     
     
+    main_dataframe = main_dataframe.unique(subset=["客服流水号", "区域-受理号码", "月份"], keep="first")
+
+    
     # 按“区域-受理号码”和“月份”分组，统计每个组合在该月的重复次数
     grouped = main_dataframe.group_by(["区域-受理号码", "月份"]).agg([
         pl.len().alias("重复次数")
     ])
 
-    
     # 提取月份的数字部分，假设月份格式为 "YYYYMM"
     main_dataframe = main_dataframe.with_columns(
         pl.col("月份").str.slice(4, 2).cast(pl.Int32).alias("月份数字")
@@ -46,6 +44,8 @@ def process_dataframe(main_dataframe:pl.DataFrame):
     # 将“重复次数”添加回原数据框
     main_dataframe = main_dataframe.join(grouped, on=["区域-受理号码", "月份"], how="left")
 
+
+    # main_dataframe = main_dataframe.unique(subset="客服流水号")
     main_dataframe = main_dataframe.unique(subset=["区域-受理号码", "月份"], keep="first")
 
     # 填充每一行对应月份的投诉次数

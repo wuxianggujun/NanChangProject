@@ -1,11 +1,9 @@
+import datetime as dt
 import logging
 import polars as pl
-import datetime as dt
+from tool.data import DataUtils
 from tool.file import FileManager
-from tqdm import tqdm
 
-
-##
 
 ##我还需要排序一下，就是让重复投诉内容按照重复投诉次数大的排序。比如抚州两个号码出现投诉多次，一个3次一个2次，那先把三次排在前面
 ## 新增时间列
@@ -32,17 +30,13 @@ def process_excel(df: pl.DataFrame) -> tuple:
     # 通过客服流水号进行去重
     dataframe = dataframe.unique(subset=["客服流水号"])
 
-    # dataframe = dataframe.with_columns(
-    #     pl.col("系统接单时间").dt.strftime("%Y/%m/%d %H").alias("系统接单时间2")
-    # )
-
-    # 创建新的列 "系统接单时间2"
+    # 添加“系统接单时间2”列，只保留日期部分
     dataframe = dataframe.with_columns(
         pl.col("系统接单时间").dt.strftime("%Y/%m/%d %H").alias("系统接单时间2")
     )
-    
-    print(dataframe.columns)
-    
+
+    dataframe = DataUtils(dataframe).insert_colum("系统接单时间", "系统接单时间2")
+  
     if '口碑未达情况原因' in dataframe.columns:
         column_index = dataframe.columns.index('口碑未达情况原因')
         dataframe = dataframe.select(dataframe.columns[:column_index + 1])
@@ -63,7 +57,7 @@ def process_excel(df: pl.DataFrame) -> tuple:
 
     result_list = []
 
-    for row in tqdm(filtered_df.iter_rows(named=True), desc="匹配区域-受理号码"):
+    for row in filtered_df.iter_rows(named=True):
         matches = dataframe.filter(pl.col("区域-受理号码") == row["区域-受理号码"])
         result_list.extend(matches.to_dicts())
 
@@ -79,7 +73,6 @@ def process_excel(df: pl.DataFrame) -> tuple:
     # 按照重复投诉次数降序排序
     filtered_repeat_df = filtered_repeat_df.sort("重复投诉次数")
 
-    print(filtered_repeat_df.columns)
     complaint_texts = []
     region_complaints = {}
     complaint_numbers = set()  # To track unique complaint numbers
@@ -90,7 +83,7 @@ def process_excel(df: pl.DataFrame) -> tuple:
     region_map = {region: idx for idx, region in enumerate(region_order)}
 
 
-    for row in tqdm(filtered_repeat_df.iter_rows(named=True), desc="提取投诉文本"):
+    for row in filtered_repeat_df.iter_rows(named=True):
         complaint_number = row["区域-受理号码"]
         
         if complaint_number in complaint_numbers:
@@ -137,7 +130,7 @@ if __name__ == '__main__':
 
     # 读取Excel文件
     try:
-        df = pl.read_excel(source_file)
+        df = file_manager.read_excel(source_file)
     except Exception as e:
         logging.error(f"无法读取Excel文件: {e}")
         exit(1)

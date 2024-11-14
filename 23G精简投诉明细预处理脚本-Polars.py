@@ -5,6 +5,7 @@ import polars as pl
 from polars import DataFrame
 
 from tool.file import FileManager
+from tool.data import DataUtils
 import re
 
 
@@ -32,21 +33,7 @@ def process_excel(excel_data: pl.DataFrame, days: int) -> pl.DataFrame:
         pl.col("系统接单时间").dt.date().alias("系统接单时间2")
     )
 
-    # # 插入“系统接单时间2”列在“系统接单时间”后面
-    # cols = filtered_df.columns
-    # idx = cols.index("系统接单时间") + 1
-    # cols.insert(idx, cols.pop(-1))  # 把新列放到“系统接单时间”之后
-    # 
-    # 
-    # filtered_df = filtered_df.select(cols)
-
-    # 使用insert_column来提高效率，插入“系统接单时间2”列到“系统接单时间”后面
-    idx = filtered_df.columns.index("系统接单时间") + 1  # 获取“系统接单时间”列的索引位置
-    filtered_df = filtered_df.select(
-        filtered_df.drop("系统接单时间2").insert_column(idx, filtered_df.get_column("系统接单时间2"))
-    )
-
-    # print(filtered_df.columns)
+    filtered_df = DataUtils(filtered_df).insert_colum("系统接单时间", "系统接单时间2")
 
     # 删除无用列（如“序号”）
     filtered_df = filtered_df.drop("序号")

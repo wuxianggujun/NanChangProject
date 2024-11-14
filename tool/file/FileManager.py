@@ -1,10 +1,9 @@
 import glob
 import os
 import logging
-from typing import AnyStr
-
 import polars as pl
 import datetime as dt
+from typing import AnyStr
 from tqdm import tqdm
 from openpyxl import Workbook, load_workbook
 
@@ -138,7 +137,7 @@ class FileManager:
             if 'Sheet' in workbook.sheetnames:
                 del workbook['Sheet']
             # 遍历每个 DataFrame，写入对应的 sheet
-            for sheet_name, df in tqdm(sheets.items(), desc="正在保存 Sheets", unit="sheet"):
+            for sheet_name, df in sheets.items():
                 if isinstance(df, pl.DataFrame):
                     # 创建一个新的 sheet
                     worksheet = workbook.create_sheet(sheet_name)

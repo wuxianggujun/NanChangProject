@@ -5,6 +5,7 @@ import os.path
 from tqdm import tqdm  # 导入tqdm
 import polars as pl
 from openpyxl.reader.excel import load_workbook
+from tool.file import FileManager
 
 def process_excel(excel_data_df: pl.DataFrame):
     # 选择所需的列
@@ -66,55 +67,23 @@ def process_dataframe(main_dataframe:pl.DataFrame):
     
     return main_dataframe
 
-
-def save_to_excel(dataframe: pl.DataFrame, file_path: str):
-    # Convert Polars DataFrame to a list of dicts (rows)
-    data = dataframe.to_dicts()
-
-    if os.path.exists(file_path):
-        os.remove(file_path)
-
-    # Load the existing workbook or create a new one
-    try:
-        workbook = load_workbook(file_path)
-    except FileNotFoundError:
-        from openpyxl import Workbook
-        workbook = Workbook()
-
-    # Create a new sheet or use the existing one
-    worksheet = workbook.active
-
-    # Add column headers to the first row
-    columns = dataframe.columns
-    for col_num, col_name in enumerate(columns, start=1):
-        worksheet.cell(row=1, column=col_num, value=col_name)
-
-    # Add the data to the worksheet
-    for row_num, row in tqdm(enumerate(data, start=2), total=len(data),desc="保存数据中"):
-        for col_num, col_name in enumerate(columns, start=1):
-            worksheet.cell(row=row_num, column=col_num, value=row[col_name])
-
-    # Save the workbook
-    workbook.save(file_path)
-    print(f"File saved to {file_path}")
-
 if __name__ == '__main__':
     try:
-        folder_path = "WorkDocument/202401-10月支撑系统"
-        file_list = glob.glob(folder_path + "/*.xls*")
-    
+        file_manager = FileManager("WorkDocument")
+        file_list = file_manager.get_list_files("202401-10月支撑系统")
+
         main_dataframe = pl.DataFrame()
     
         for file in tqdm(file_list, desc="读取文件列表中"):
-            data_df = pl.read_excel(file)
+            data_df = file_manager.read_excel(file)
             # 确保列类型一致
             data_df = standardize_column_types(data_df)
             data_df = process_excel(data_df)
             main_dataframe = pl.concat([main_dataframe, data_df],how="vertical")
             
         main_dataframe = process_dataframe(main_dataframe)
-            
-        save_to_excel(main_dataframe,"WorkDocument/全月份投诉明细.xlsx")
+                    
+        file_manager.save_to_excel(main_dataframe, "全月份投诉明细.xlsx")
         
     except Exception as e:
         logging.error(e)

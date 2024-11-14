@@ -1,5 +1,8 @@
+import glob
 import os
 import logging
+from typing import AnyStr
+
 import polars as pl
 import datetime as dt
 from tqdm import tqdm
@@ -23,12 +26,10 @@ class FileManager:
         for col_num, col_name in enumerate(columns, start=1):
             worksheet.cell(row=1, column=col_num, value=col_name)
 
-        # 写入数据
-        for row_num, row in enumerate(data, start=2):
+        # Add the data to the worksheet
+        for row_num, row in tqdm(enumerate(data, start=2), total=len(data), desc="保存数据中"):
             for col_num, col_name in enumerate(columns, start=1):
                 worksheet.cell(row=row_num, column=col_num, value=row[col_name])
-
-        logging.info(f"已保存 sheet: {worksheet.title}")
 
     def _generate_output_path(self, filename: str) -> str:
         """生成输出文件的路径，并检查文件是否存在"""
@@ -46,6 +47,16 @@ class FileManager:
             logging.error(f"生成文件路径失败: {e}")
             return None
 
+    ### 获取basedir下某个文件夹下的文件 ###
+    def get_list_files(self, dir_name: str, file_extension="*.xls*") -> list[AnyStr]:
+        folder_path = os.path.join(self.base_dir, dir_name)
+        if not os.path.exists(folder_path):
+            logging.error(f"未找到指定目录: {folder_path}")
+            exit(1)
+            
+        file_list = glob.glob(folder_path + "/" + file_extension)
+        return file_list
+        
     def get_latest_file(self, dir_name: str, file_extension=(".xlsx", ".xls")) -> str:
         source_dir = os.path.join(self.base_dir, dir_name)
         if not os.path.exists(source_dir):
@@ -65,43 +76,51 @@ class FileManager:
             logging.error(f"获取最新文件时发生错误: {e}")
             return ""
 
-    def read_excel(self, file_path: str, sheet_name: str = 0) -> pl.DataFrame | dict[str, pl.DataFrame]:
+    def read_excel(self, file_path: str, sheet_name: str = None,show_logs=False) -> pl.DataFrame | dict[str, pl.DataFrame]:
         """读取指定Excel文件的特定sheet"""
         try:
             if not os.path.exists(file_path):
                 logging.error(f"文件不存在: {file_path}")
                 return pl.DataFrame()
-            data = pl.read_excel(file_path, sheet_name=sheet_name)
+            data = pl.read_excel(file_path, sheet_name=None)
+            if show_logs:
             # 检查返回的数据类型
-            if isinstance(data, pl.DataFrame):
-                logging.info(f"成功读取 {file_path} 中的单个 sheet: {sheet_name}")
-            elif isinstance(data, dict):
-                logging.info(f"成功读取 {file_path} 中的多个 sheet: {list(data.keys())}")
+                if isinstance(data, pl.DataFrame):
+                    logging.info(f"成功读取 {file_path}")
+                elif isinstance(data, dict):
+                    logging.info(f"成功读取 {file_path} 中的多个 sheet: {list(data.keys())}")
             return data
         except Exception as e:
             logging.error(f"读取文件 {file_path} 中的 sheet: {sheet_name} 失败: {e}")
             return pl.DataFrame() if isinstance(sheet_name, (str, int)) else {}
 
-    def save_to_excel(self, df: pl.DataFrame, filename: str):
+    def save_to_excel(self, df: pl.DataFrame, file_name: str,file_path:str = None):
         try:
             if df is None:
                 logging.error("DataFrame为空，无法保存")
                 return
-            output_path = self._generate_output_path(filename)
+            temp_file_name = self._generate_output_path(file_name)
+
+            output_path = None
+            
+            if file_path is None:
+                output_path = temp_file_name
+            else:
+                output_path = os.path.join(file_path, temp_file_name)
+                
             if os.path.exists(output_path):
                 logging.warning(f"文件{output_path}已存在，将覆盖")
                 os.remove(output_path)
+                
             # 创建一个新的工作簿
             workbook = Workbook()
             worksheet = workbook.active
-            
+
             # 使用封装的方法保存 DataFrame
             self._save_dataframe_to_sheet(worksheet, df)
 
             # 保存 Excel 文件
             workbook.save(output_path)
-            logging.info(f"数据保存成功，路径：{output_path}")
-
             logging.info(f"数据保存成功，路径：{output_path}")
             return output_path
         except Exception as e:
@@ -109,11 +128,11 @@ class FileManager:
             return None
 
     def save_to_sheet(self, filename: str, **sheets):
-        
+
         """将多个 Polars DataFrame 保存到一个 Excel 文件的多个 sheet"""
         try:
             output_path = self._generate_output_path(filename)
- 
+
             workbook = Workbook()
             # 默认创建一个空的Sheet，删除它
             if 'Sheet' in workbook.sheetnames:
@@ -130,7 +149,7 @@ class FileManager:
 
             # 保存 Excel 文件
             workbook.save(output_path)
-            logging.info(f"多sheet数据保存成功，路径：{output_path}")
+            logging.info(f"文件保存成功，路径：{output_path}")
 
         except Exception as e:
-            logging.error(f"多sheet数据保存失败: {e}")
+            logging.error(f"文件保存失败: {e}")

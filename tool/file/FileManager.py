@@ -7,19 +7,80 @@ import datetime as dt
 from typing import AnyStr
 from tqdm import tqdm
 from openpyxl import Workbook, load_workbook
-from tool.data import DataUtils
+from openpyxl.styles import Font,Alignment
+from openpyxl.utils import get_column_letter
 
 class FileManager:
     def __init__(self, base_dir: str):
         self.base_dir = base_dir
+        self._output_path = None
         # 设置日志配置
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+
+    @property
+    def output_path(self):
+        ### 获取输出路径 ###
+        return self._output_path
+
+    @property
+    def base_directory(self):
+        ### 获取基础目录 ###
+        return self.base_dir
+
+
+    def save_to_sheet(self,filename:str,formatter=None,**sheets) -> str:
+        """
+        将多个 Polars DataFrame 保存到一个 Excel 文件的多个 sheet
+        :param filename: 文件名
+        :param formatter: 格式化器类（可选）
+        :param sheets: 包含多个sheet的数据
+        :return: 输出文件路径
+        """
+        try:
+            print("Debug - Sheets content:", sheets)  # 添加调试信息
+            self._output_path = self._generate_output_path(filename)
+
+            workbook = Workbook()
+
+            if 'Sheet' in workbook.sheetnames:
+                del workbook['Sheet']
+
+            if not sheets:
+                worksheet = workbook.create_sheet('Sheet')
+                workbook.save(self._output_path)
+                return self._output_path
+            
+            for sheet_name, df in sheets.items():
+                if isinstance(df, pl.DataFrame):
+                    worksheet = workbook.create_sheet(sheet_name)
+                    self._save_dataframe_to_sheet(worksheet, df)
+                else:
+                    if sheet_name != 'formatter':
+                        logging.warning(f"{sheet_name} 不是 Polars DataFrame 类型，无法保存")
+           
+            # 如果提供了格式化器，则应用格式化
+            if formatter:
+                formatter_instance = formatter(workbook)
+                formatter_instance.apply_formatting()
+
+            workbook.save(self._output_path)
+            logging.info(f"文件保存成功，路径：{self._output_path}")
+            return self._output_path
+        
+        except Exception as e:
+            logging.error(f"文件保存失败: {e}")
+            return None
+
 
     def _save_dataframe_to_sheet(self, worksheet, df: pl.DataFrame):
         """封装写入 Polars DataFrame 到 Excel sheet 的方法"""
         # 将 Polars DataFrame 转为字典列表
         data = df.to_dicts()
         
+        default_font = Font(name='宋体',size=12)
+        alignment = Alignment(horizontal='center',vertical='center')
+
         # 获取列名
         columns = df.columns
         # 写入列名（header）
@@ -128,30 +189,3 @@ class FileManager:
         except Exception as e:
             logging.error(f"数据保存失败: {e}")
             return None
-
-    def save_to_sheet(self, filename: str, **sheets):
-
-        """将多个 Polars DataFrame 保存到一个 Excel 文件的多个 sheet"""
-        try:
-            output_path = self._generate_output_path(filename)
-
-            workbook = Workbook()
-            # 默认创建一个空的Sheet，删除它
-            if 'Sheet' in workbook.sheetnames:
-                del workbook['Sheet']
-            # 遍历每个 DataFrame，写入对应的 sheet
-            for sheet_name, df in sheets.items():
-                if isinstance(df, pl.DataFrame):
-                    # 创建一个新的 sheet
-                    worksheet = workbook.create_sheet(sheet_name)
-                    # 使用封装的方法保存 DataFrame
-                    self._save_dataframe_to_sheet(worksheet, df)
-                else:
-                    logging.warning(f"{sheet_name} 不是 Polars DataFrame 类型，无法保存")
-
-            # 保存 Excel 文件
-            workbook.save(output_path)
-            logging.info(f"文件保存成功，路径：{output_path}")
-
-        except Exception as e:
-            logging.error(f"文件保存失败: {e}")

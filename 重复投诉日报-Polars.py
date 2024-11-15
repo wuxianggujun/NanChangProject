@@ -19,14 +19,11 @@ def generate_repeat_complaints_table(dataframe: pl.DataFrame) -> pl.DataFrame:
     # 对每个区域-受理号码只统计一次
     unique_complaints = repeat_complaints.unique(subset=["区域-受理号码"])
 
-    # print(f"Debug: Found {len(unique_complaints)} unique complaints") # 调试信息
-
     # 统计每个地区的重复投诉次数
     for row in unique_complaints.iter_rows(named=True):
         region = row["区域"].replace("市", "")
         count = row["重复投诉次数"]
-        # print(f"Debug: Processing region {region} with count {count}") # 调试信息
-
+       
         if region in region_stats:
             if count == 2:
                 region_stats[region]["重复2次"] += 1
@@ -34,8 +31,7 @@ def generate_repeat_complaints_table(dataframe: pl.DataFrame) -> pl.DataFrame:
                 region_stats[region]["重复3次"] += 1
             elif count >= 4:
                 region_stats[region]["重复4次及以上"] += 1
-            # print(f"Debug: Unexpected count {count} for region {region}") # 调试信息
-
+            
     # 转换为DataFrame格式
     for region in region_order:
         # 计算当日新增重复投诉总计
@@ -54,8 +50,7 @@ def generate_repeat_complaints_table(dataframe: pl.DataFrame) -> pl.DataFrame:
             "今天重复投诉解决情况": None,
             "累计重复投诉解决率": None
         }
-        # print(f"Debug: Adding row for region {region} with total {row_data}") # 调试信息
-
+        
         stats_data.append(row_data)
 
     # 添加总计行

@@ -1,10 +1,9 @@
 import datetime as dt
 import logging
-import openpyxl
 import polars as pl
 from tool.data import DataUtils
 from tool.file import FileManager
-from tool.ExcelFormatter import ExcelFormatter
+from tool.formatter import ExcelFormatter
 
 
 def generate_repeat_complaints_table(dataframe: pl.DataFrame) -> pl.DataFrame:
@@ -85,8 +84,9 @@ def process_excel(df: pl.DataFrame) -> tuple:
         logging.info("初始数据类型转换完成")
 
             # 定义时间范围
-        start_time = (dt.datetime.now() - dt.timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
+        #start_time = (dt.datetime.now() - dt.timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
         end_time = dt.datetime.now().replace(hour=16, minute=0, second=0, microsecond=0)
+        start_time = (end_time - dt.timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
       
 
         logging.info(f"开始处理：{start_time} 到 {end_time} 共三十天的数据...")

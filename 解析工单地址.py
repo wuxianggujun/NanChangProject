@@ -1,6 +1,5 @@
 import re
 import os
-from csv import excel
 import datetime as dt
 from os import remove
 

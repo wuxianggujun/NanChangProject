@@ -1,7 +1,4 @@
-from idlelib.iomenu import errors
-
 import polars as pl
-import numpy as np
 import os
 import logging
 import datetime as dt

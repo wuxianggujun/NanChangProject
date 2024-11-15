@@ -1,12 +1,7 @@
 import os
 import logging
-import pandas as pd
 import datetime as dt
-
-from pandas import DataFrame
-
 import Utils
-
 import pandas as pd
 
 
@@ -120,7 +115,7 @@ def process_excel(df: pd.DataFrame):
     # complaint_counts = dataframe['区域-受理号码'].value_counts().to_dict()
     # target_dataframe['重复投诉次数'] = target_dataframe['区域-受理号码'].map(complaint_counts).fillna(0).astype(int)
 
-    monthly_occurrences: DataFrame = count_occurrences_in_last_month(dataframe,target_dataframe)
+    monthly_occurrences: pd.DataFrame = count_occurrences_in_last_month(dataframe,target_dataframe)
     print(monthly_occurrences )
 
     # 返回处理后的 DataFrame 和带有重复投诉次数的 DataFrame

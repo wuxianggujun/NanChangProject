@@ -145,13 +145,27 @@ class FileManager:
             if not os.path.exists(file_path):
                 logging.error(f"文件不存在: {file_path}")
                 return pl.DataFrame()
-            data = pl.read_excel(file_path, sheet_name=None)
-            if show_logs:
-            # 检查返回的数据类型
-                if isinstance(data, pl.DataFrame):
+            data = pl.read_excel(file_path, sheet_name=sheet_name)
+
+            if isinstance(data,pl.DataFrame):
+                original_rows = data.shape[0]
+                # 清理空行
+                data = data.filter(~pl.all_horizontal(pl.all().is_null()))
+                cleaned_rows = data.shape[0]
+                if show_logs:
                     logging.info(f"成功读取 {file_path}")
-                elif isinstance(data, dict):
-                    logging.info(f"成功读取 {file_path} 中的多个 sheet: {list(data.keys())}")
+                    if original_rows != cleaned_rows:
+                        logging.info(f"数据清理: 删除 {original_rows - cleaned_rows} 行空数据")
+            elif isinstance(data,dict):
+                for sheet_key in data.keys():
+                    original_rows = data[sheet_key].shape[0]
+                    # 清理空行
+                    data[sheet_key] = data[sheet_key].filter(~pl.all_horizontal(pl.all().is_null()))
+                    cleaned_rows = data[sheet_key].shape[0]
+                    if show_logs:
+                        logging.info(f"成功读取 {file_path} 中的 {sheet_key} 表")
+                        if original_rows != cleaned_rows:
+                            logging.info(f"数据清理: 删除 {original_rows - cleaned_rows} 行空数据")
             return data
         except Exception as e:
             logging.error(f"读取文件 {file_path} 中的 sheet: {sheet_name} 失败: {e}")

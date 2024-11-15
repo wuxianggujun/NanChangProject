@@ -2,11 +2,8 @@ import pandas as pd
 import datetime as dt
 import logging
 import os
-
 from pandas import DataFrame
-
 import Utils
-
 
 def process_excel(df: pd.DataFrame, csv_data: DataFrame):
     print("DataFrame Data Columns:", csv_data.columns)

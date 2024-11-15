@@ -1,10 +1,6 @@
 import logging
-import glob
-import os.path
-
 from tqdm import tqdm  # 导入tqdm
 import polars as pl
-from openpyxl.reader.excel import load_workbook
 from tool.file import FileManager
 
 def process_excel(excel_data_df: pl.DataFrame):

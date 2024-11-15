@@ -7,31 +7,19 @@ from tool.data import DataUtils
 import re
 
 def process_excel(excel_data: pl.DataFrame, days: int) -> pl.DataFrame:
-    # 确保“系统接单时间”列的格式为日期时间
-    excel_data = excel_data.with_columns(
-        pl.col("系统接单时间").str.strptime(pl.Datetime, strict=False).alias("系统接单时间")
-    )
+    data_utils = DataUtils(excel_data)
 
-    now = dt.datetime.now()
-    start_time = (now - dt.timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
-    end_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
-
-    # 筛选日期范围内的数据
-    filtered_df = excel_data.filter(
-        (pl.col("系统接单时间") >= start_time) & (pl.col("系统接单时间") <= end_time)
-    )
+    filtered_df = data_utils.filter_data_range(date_column="系统接单时间",days=days)
 
     # 添加“系统接单时间2”列，只保留日期部分
-    filtered_df = filtered_df.with_columns(
-        pl.col("系统接单时间").dt.date().alias("系统接单时间2")
-    )
+    filtered_df = DataUtils(filtered_df).add_date_only_column(date_column="系统接单时间",new_column="系统接单时间2")
 
     filtered_df = DataUtils(filtered_df).insert_colum("系统接单时间", "系统接单时间2")
 
-    # 删除无用列（如“序号”）
-    filtered_df = filtered_df.drop("序号")
-    # 去重处理
-    filtered_df = filtered_df.unique(subset=["客服流水号"])
+    filtered_df = DataUtils(filtered_df).clean_and_unique(
+        unique_columns="客服流水号",
+        drop_columns=["序号"]
+    )
 
     logging.info(f"受理路径唯一值: {filtered_df['受理路径'].unique()}")
 
@@ -42,6 +30,25 @@ def process_excel(excel_data: pl.DataFrame, days: int) -> pl.DataFrame:
     )
 
     filtered_df = filtered_df.filter(path_conditions)
+
+     # 添加投诉内容筛选条件
+    content_include = (
+         filtered_df["投诉内容"].str.contains("语音业务类型：无法主被叫", literal=True)
+        |filtered_df["投诉内容"].str.contains("无法接打电话", literal=True)
+        | filtered_df["投诉内容"].str.contains("手机无法通话", literal=True)
+    )
+    
+    content_exclude = (
+        ~filtered_df["投诉内容"].str.contains("无法上网", literal=True)
+        & ~filtered_df["投诉内容"].str.contains("无信号", literal=True)
+        & ~filtered_df["投诉内容"].str.contains("信号不好", literal=True)
+        & ~filtered_df["投诉内容"].str.contains("故障告警", literal=True)
+        & ~filtered_df["投诉内容"].str.contains("没有信号", literal=True)
+    )
+    
+    # 应用投诉内容筛选条件
+    filtered_df = filtered_df.filter(content_include & content_exclude)
+    
     # 如果“区域”列存在，进行数据清理和排序
     if "区域" in filtered_df.columns:
         # 去掉“区域”列中的“市”字

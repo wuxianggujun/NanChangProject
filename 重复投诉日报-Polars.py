@@ -79,43 +79,53 @@ def extract_address_and_issue(complaint_content):
 
 
 def process_excel(df: pl.DataFrame) -> tuple:
-    try:
-        now_time = dt.datetime.now()
-        start_time = (now_time - dt.timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
-        end_time = now_time.replace(hour=16, minute=0, second=0, microsecond=0)
+   
+       # 打印初始数据信息
+    logging.info(f"初始数据形状: {df.shape}")
+    logging.info(f"系统接单时间列类型: {df['系统接单时间'].dtype}")
+    logging.info(f"系统接单时间样本: {df['系统接单时间'].head()}")
 
-        # 过滤数据
-        dataframe = df.with_columns(pl.col("系统接单时间").str.strptime(pl.Datetime, "%Y-%m-%d %H:%M:%S"))
-        dataframe = dataframe.filter(
-                (pl.col("系统接单时间") >= start_time) & (pl.col("系统接单时间") <= end_time)
-            )
+    try:
+      
+        logging.info("初始数据类型转换完成")
+
+            # 定义时间范围
+        start_time = (dt.datetime.now() - dt.timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
+        end_time = dt.datetime.now().replace(hour=16, minute=0, second=0, microsecond=0)
+      
+
         logging.info(f"开始处理：{start_time} 到 {end_time} 共三十天的数据...")
 
-        # 删除序号和工单号
-        dataframe = dataframe.drop(["序号", "工单号"])
+        dataframe = DataUtils(df).filter_data_range(
+            date_column="系统接单时间",
+            start_time=start_time,
+            end_time=end_time
+        )
 
-        # 通过客服流水号进行去重
-        dataframe = dataframe.unique(subset=["客服流水号"])
+        dataframe = DataUtils(dataframe).clean_and_unique(
+            unique_columns=["客服流水号"],
+            drop_columns=["序号", "工单号"]
+        )
 
-        # 添加“系统接单时间2”列，只保留日期部分
-        dataframe = dataframe.with_columns(
-            pl.col("系统接单时间").dt.strftime("%Y/%m/%d %H").alias("系统接单时间2")
+        dataframe = DataUtils(dataframe).add_date_only_column(
+            date_column="系统接单时间",
+            new_column="系统接单时间2",
+            format="%Y/%m/%d %H"
         )
 
         dataframe = DataUtils(dataframe).insert_colum("系统接单时间", "系统接单时间2")
 
-        if '口碑未达情况原因' in dataframe.columns:
-            column_index = dataframe.columns.index('口碑未达情况原因')
-            dataframe = dataframe.select(dataframe.columns[:column_index + 1])
-            logging.info("删除“口碑未达情况原因”左侧数据")
+        dataframe = DataUtils(dataframe).drop_columns_after(column_name="口碑未达情况原因")
 
-        if all(col in dataframe.columns for col in ["区域", "受理号码"]):
-            dataframe = dataframe.with_columns(
-                (pl.col("区域") + "-" + pl.col("受理号码").cast(pl.Utf8)).alias("区域-受理号码"))
+        dataframe = DataUtils(dataframe).combine_columns(
+            columns=["区域", "受理号码"],
+            separator="-",
+            new_column="区域-受理号码"
+        )
 
         # 添加筛选条件：今天下午四点到昨天下午四点的数据
-        yesterday_end = (now_time - dt.timedelta(days=1)).replace(hour=16, minute=0, second=0, microsecond=0)
-        today_start = now_time.replace(hour=16, minute=0, second=0, microsecond=0)
+        yesterday_end = (dt.datetime.now() - dt.timedelta(days=1)).replace(hour=16, minute=0, second=0, microsecond=0)
+        today_start = dt.datetime.now().replace(hour=16, minute=0, second=0, microsecond=0)
 
         # 筛选出时间段内的重复工单
         filtered_df = dataframe.filter(
@@ -223,7 +233,17 @@ def process_excel(df: pl.DataFrame) -> tuple:
 
     except Exception as e:
         logging.error(f"数据处理失败: {str(e)}")
-    raise
+        # 返回空的结果而不是直接raise
+        empty_stats = pl.DataFrame({
+            "区域": ["总计"],
+            "重复2次": [0],
+            "重复3次": [0],
+            "重复4次及以上": [0],
+            "当日新增重复投诉总计": [0],
+            "今天重复投诉解决情况": [0],
+            "累计重复投诉解决率": [None]
+        })
+        return df, pl.DataFrame(), pl.DataFrame({"投诉信息": ["处理失败"]}), empty_stats
 
 
 if __name__ == '__main__':

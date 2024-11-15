@@ -15,20 +15,6 @@ class ExcelFormatter:
         """
         ws = self.workbook[sheet_name]
 
-        column_widths = {}
-
-        # # 设置列宽
-        # column_widths = {
-        #     'A': 12,  # 区域
-        #     'B': 12,  # 重复2次
-        #     'C': 12,  # 重复3次
-        #     'D': 16,  # 重复4次及以上
-        #     'E': 20,  # 当日新增重复投诉总计
-        #     'F': 20,  # 今天重复投诉解决情况
-        #     'G': 20,  # 累计重复投诉解决率
-        # }
-
-
         # 用于跟踪每列的最大宽度
         column_widths = {}
     
@@ -82,6 +68,15 @@ class ExcelFormatter:
                 cell.alignment = alignment
 
                  
+                    # 处理重复投诉次数列（B、C、D列）和当日新增重复投诉总计（E列）
+                if col in [2, 3, 4]:  # B、C、D列
+                    try:
+                        if cell.value is not None and cell.value != "":
+                            cell.font = self.bold_font
+                    except (ValueError, TypeError):
+                        pass
+            
+
                 # 设置当日新增重复投诉总计列（E列）大于0的数字为粗体
                 if col == 5:  # E列
                     try:

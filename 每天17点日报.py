@@ -9,8 +9,9 @@ from tool.decorators.ErrorHandler import error_handler
 @error_handler
 def process_complaints(df:pl.DataFrame)->pl.DataFrame:
     today_end = dt.datetime.now().replace(hour=17,minute=0,second=0,microsecond=0)
-    yesterday_start = (today_end - dt.timedelta(days=1)).replace(hour=0,minute=0,second=0,microsecond=0)
+    yesterday_start = (today_end - dt.timedelta(days=1)).replace(hour=17,minute=0,second=0,microsecond=0)
 
+    print(f"处理{yesterday_start}到{today_end}工单时间到")
     # 清理数据：删除全部列为空的行
     cleaned_df = df.filter(~pl.all_horizontal(pl.all().is_null()))
 
@@ -42,7 +43,7 @@ def process_complaints(df:pl.DataFrame)->pl.DataFrame:
             .collect()
         )
 
-    return stats
+    return datafframe,stats
     
 @error_handler
 def generate_report_text(stats_df:pl.DataFrame)->str:
@@ -92,11 +93,13 @@ if __name__ == "__main__":
 
     source_file = file_manager.get_latest_file("source")
     df = file_manager.read_excel(source_file)
-    stats_df = process_complaints(df)
+    result_df,stats_df = process_complaints(df)
     report_text = generate_report_text(stats_df)
 
+
+
     text_df = pl.DataFrame({"日报信息":[report_text]})
-    file_manager.save_to_sheet("日常日报",原始数据=df,统计结果=stats_df,日报信息=text_df)
+    file_manager.save_to_sheet("日常日报",原始数据=result_df,统计结果=stats_df,日报信息=text_df)
 
     print(f"输出文件路径:{file_manager.output_path}")
     print("\n生成的日报信息文本:")

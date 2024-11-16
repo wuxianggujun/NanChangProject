@@ -5,7 +5,7 @@ from openpyxl.utils import get_column_letter
 class ExcelFormatter:
     def __init__(self, workbook: Workbook):
         self.workbook = workbook
-        self.default_font = Font(name='宋体', size=10)
+        self.default_font = Font(name='宋体', size=11)
         self.header_font = Font(name='宋体',size=12,bold=True)
         self.bold_font = Font(name='宋体',size=12,bold=True)
 

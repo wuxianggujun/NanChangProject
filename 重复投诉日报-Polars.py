@@ -220,7 +220,7 @@ def process_excel(df: pl.DataFrame) -> tuple:
         all_complaints_text = f"总共投诉：{region_summary}\n\n重复投诉内容如下:\n" + "\n".join(complaint_texts_sorted)
 
         # Create a new DataFrame for complaint text
-        text_df = pl.DataFrame({"投诉信息": [all_complaints_text]})
+        text_df = pl.DataFrame({f"{dt.datetime.now().strftime('%Y%m%d')}新增重复投诉": [all_complaints_text]})
 
         stats_df = generate_repeat_complaints_table(result_df)
 

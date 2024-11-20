@@ -75,24 +75,71 @@ class FileManager:
 
     def _save_dataframe_to_sheet(self, worksheet, df: pl.DataFrame):
         """封装写入 Polars DataFrame 到 Excel sheet 的方法"""
-        # 将 Polars DataFrame 转为字典列表
-        data = df.to_dicts()
+        try:
+            # 调试信息
+            logging.info(f"正在保存数据，形状: {df.shape}")
         
-        default_font = Font(name='宋体',size=12)
-        alignment = Alignment(horizontal='center',vertical='center')
+            # 1. 写入列名
+            for col_idx, col_name in enumerate(df.columns, 1):
 
-        # 获取列名
-        columns = df.columns
-        # 写入列名（header）
-        for col_num, col_name in enumerate(columns, start=1):
-            # 去除列名中的后缀（如 网络类型_1 -> 网络类型）
-            cleaned_col_name = re.sub(r"_\d+$", "", col_name)
-            worksheet.cell(row=1, column=col_num, value=cleaned_col_name)
+                # 去除列名中的后缀（如 网络类型_1 -> 网络类型）
+                cleaned_col_name = re.sub(r"_\d+$", "", col_name)
+                worksheet.cell(row=1, column=col_idx, value=cleaned_col_name)
+        
+            # 2. 写入数据 - 使用 df.rows() 直接获取数据
+            for row_idx, row in enumerate(df.rows(), 1):  # 从1开始，因为第一行是列名
+                for col_idx, value in enumerate(row, 1):
+          
+                    cell = worksheet.cell(row=row_idx+1, column=col_idx)
+                    cell.value = value
 
-        # Add the data to the worksheet
-        for row_num, row in tqdm(enumerate(data, start=2), total=len(data), desc="保存数据中"):
-            for col_num, col_name in enumerate(columns, start=1):
-                worksheet.cell(row=row_num, column=col_num, value=row[col_name])
+        except Exception as e:
+            logging.error(f"保存数据到工作表时出错: {str(e)}")
+            logging.error(f"数据示例: {df.head()}")
+            raise
+    # def _save_dataframe_to_sheet(self, worksheet, df: pl.DataFrame):
+    #     """封装写入 Polars DataFrame 到 Excel sheet 的方法"""
+    #     # 将 Polars DataFrame 转为字典列表
+    #     data = df.to_dicts()
+
+    #     # 获取列名
+    #     columns = df.columns
+
+
+    #     # # 修改单元格写入逻辑
+    #     # for row_num, row in tqdm(enumerate(data, start=2), total=len(data), desc="保存数据中"):
+    #     #     for col_num, col_name in enumerate(columns, start=1):
+    #     #         cell = worksheet.cell(row=row_num, column=col_num)
+    #     #     value = row[col_name]
+    #     #     cell.value = value
+            
+    #     #     # 对包含换行符的单元格启用文本换行
+    #     #     if isinstance(value, str) and ('\n' in value):
+    #     #         cell.alignment = Alignment(wrap_text=True, vertical='top')
+    #     #         # 调整行高以适应内容
+    #     #         worksheet.row_dimensions[row_num].height = max(15 * value.count('\n'), 15)
+    
+    #     # # 自动调整列宽
+    #     # for col_num, column in enumerate(worksheet.columns, start=1):
+    #     #     max_length = 0
+    #     #     for cell in column:
+    #     #         try:
+    #     #             if cell.value:
+    #     #                 max_length = max(max_length, len(str(cell.value).split('\n')[0]))
+    #     #         except:
+    #     #             pass
+    #     #     worksheet.column_dimensions[get_column_letter(col_num)].width = min(max_length + 2, 100)
+
+    #     # 写入列名（header）
+    #     for col_num, col_name in enumerate(columns, start=1):
+    #         # 去除列名中的后缀（如 网络类型_1 -> 网络类型）
+    #         cleaned_col_name = re.sub(r"_\d+$", "", col_name)
+    #         worksheet.cell(row=1, column=col_num, value=cleaned_col_name)
+
+    #     # Add the data to the worksheet
+    #     for row_num, row in tqdm(enumerate(data, start=2), total=len(data), desc="保存数据中"):
+    #         for col_num, col_name in enumerate(columns, start=1):
+    #             worksheet.cell(row=row_num, column=col_num, value=row[col_name])
 
     def _generate_output_path(self, filename: str) -> str:
         """生成输出文件的路径，并检查文件是否存在"""
@@ -139,37 +186,28 @@ class FileManager:
             logging.error(f"获取最新文件时发生错误: {e}")
             return ""
 
-    def read_excel(self, file_path: str, sheet_name: str = None,show_logs=False) -> pl.DataFrame | dict[str, pl.DataFrame]:
-        """读取指定Excel文件的特定sheet"""
+    def read_excel(self, file_path: str, sheet_name: str = None, show_logs=False) -> pl.DataFrame | dict[str, pl.DataFrame]:
         try:
             if not os.path.exists(file_path):
                 logging.error(f"文件不存在: {file_path}")
                 return pl.DataFrame()
+            
+             # 修改：移除过度的数据清理
             data = pl.read_excel(file_path, sheet_name=sheet_name)
 
-            if isinstance(data,pl.DataFrame):
-                original_rows = data.shape[0]
-                # 清理空行
-                data = data.filter(~pl.all_horizontal(pl.all().is_null()))
-                cleaned_rows = data.shape[0]
+            if isinstance(data, pl.DataFrame):
                 if show_logs:
                     logging.info(f"成功读取 {file_path}")
-                    if original_rows != cleaned_rows:
-                        logging.info(f"数据清理: 删除 {original_rows - cleaned_rows} 行空数据")
-            elif isinstance(data,dict):
-                for sheet_key in data.keys():
-                    original_rows = data[sheet_key].shape[0]
-                    # 清理空行
-                    data[sheet_key] = data[sheet_key].filter(~pl.all_horizontal(pl.all().is_null()))
-                    cleaned_rows = data[sheet_key].shape[0]
-                    if show_logs:
+            elif isinstance(data, dict):
+                if show_logs:
+                    for sheet_key in data.keys():
                         logging.info(f"成功读取 {file_path} 中的 {sheet_key} 表")
-                        if original_rows != cleaned_rows:
-                            logging.info(f"数据清理: 删除 {original_rows - cleaned_rows} 行空数据")
+                    
             return data
         except Exception as e:
             logging.error(f"读取文件 {file_path} 中的 sheet: {sheet_name} 失败: {e}")
             return pl.DataFrame() if isinstance(sheet_name, (str, int)) else {}
+    
 
     def save_to_excel(self, df: pl.DataFrame, file_name: str,file_path:str = None):
         try:

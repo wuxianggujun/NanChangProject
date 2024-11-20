@@ -30,7 +30,7 @@ if __name__ == '__main__':
                 lines[i] = 'uipass=\n'
             elif 'qtpass=' in lines[i]:
                 lines[i] = 'qtpass=\n'
-
+     
         with open(file_path, 'w', encoding='utf-8') as file:
             file.writelines(lines)
 

@@ -47,6 +47,6 @@ def process_datas(file_path):
     print(f'数据保存到{file_path}')
 
 if __name__ == '__main__':
-    file_path = r"WorkDocument/重复投诉日报/source/工单查询 (60).xlsx"
+    file_path = r"C:\Users\wuxianggujun\Downloads\工单查询 (83).xlsx"
 
     process_datas(file_path)

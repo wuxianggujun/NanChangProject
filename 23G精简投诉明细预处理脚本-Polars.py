@@ -35,7 +35,10 @@ def process_excel(excel_data: pl.DataFrame, days: int) -> pl.DataFrame:
     content_include = (
          filtered_df["投诉内容"].str.contains("语音业务类型：无法主被叫", literal=True)
         |filtered_df["投诉内容"].str.contains("无法接打电话", literal=True)
-        | filtered_df["投诉内容"].str.contains("手机无法通话", literal=True)
+        | filtered_df["投诉内容"].str.contains("无法通话", literal=True)
+        | filtered_df["投诉内容"].str.contains("接不到电话", literal=True)
+        | filtered_df["投诉内容"].str.contains("无法打电话", literal=True)
+        | filtered_df["投诉内容"].str.contains("无法拨打电话", literal=True)
     )
     
     content_exclude = (
@@ -44,6 +47,7 @@ def process_excel(excel_data: pl.DataFrame, days: int) -> pl.DataFrame:
         & ~filtered_df["投诉内容"].str.contains("信号不好", literal=True)
         & ~filtered_df["投诉内容"].str.contains("故障告警", literal=True)
         & ~filtered_df["投诉内容"].str.contains("没有信号", literal=True)
+        & ~filtered_df["投诉内容"].str.contains("上网速度慢", literal=True)
     )
     
     # 应用投诉内容筛选条件

@@ -110,7 +110,7 @@ def process_excel(df: pl.DataFrame) -> tuple:
 
         dataframe = DataUtils(dataframe).insert_colum("系统接单时间", "系统接单时间2")
 
-        dataframe = DataUtils(dataframe).drop_columns_after(column_name="口碑未达情况原因")
+        #dataframe = DataUtils(dataframe).drop_columns_after(column_name="口碑未达情况原因")
 
         dataframe = DataUtils(dataframe).combine_columns(
             columns=["区域", "受理号码"],

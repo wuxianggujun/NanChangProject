@@ -39,6 +39,18 @@ def process_excel(excel_data: pl.DataFrame, days: int) -> pl.DataFrame:
         | filtered_df["投诉内容"].str.contains("接不到电话", literal=True)
         | filtered_df["投诉内容"].str.contains("无法打电话", literal=True)
         | filtered_df["投诉内容"].str.contains("无法拨打电话", literal=True)
+        | filtered_df["投诉内容"].str.contains("无法接通拨打电话", literal=True)
+        | filtered_df["投诉内容"].str.contains("语音通话无法正常使用", literal=True)
+        | filtered_df["投诉内容"].str.contains("无法正常通话", literal=True)
+        | filtered_df["投诉内容"].str.contains("打不了电话", literal=True)
+        | filtered_df["投诉内容"].str.contains("无法接通电话", literal=True)
+        | filtered_df["投诉内容"].str.contains("打不出电话能接电话", literal=True)
+        | filtered_df["投诉内容"].str.contains("手机不支持", literal=True)
+        | filtered_df["投诉内容"].str.contains("系统不支持", literal=True)
+        | filtered_df["投诉内容"].str.contains("拨打不出电话", literal=True)
+        | filtered_df["投诉内容"].str.contains("无法拨打出去电话", literal=True)
+        | filtered_df["投诉内容"].str.contains("没办法打电话", literal=True)
+        | filtered_df["投诉内容"].str.contains("接不了电话", literal=True)
     )
     
     content_exclude = (
@@ -48,6 +60,10 @@ def process_excel(excel_data: pl.DataFrame, days: int) -> pl.DataFrame:
         & ~filtered_df["投诉内容"].str.contains("故障告警", literal=True)
         & ~filtered_df["投诉内容"].str.contains("没有信号", literal=True)
         & ~filtered_df["投诉内容"].str.contains("上网速度慢", literal=True)
+        & ~filtered_df["投诉内容"].str.contains("私密号码", literal=True)
+        & ~filtered_df["投诉内容"].str.contains("网络不稳定", literal=True)
+        & ~filtered_df["投诉内容"].str.contains("反映信号差", literal=True)
+        & ~filtered_df["投诉内容"].str.contains("停机状态", literal=True)
     )
     
     # 应用投诉内容筛选条件

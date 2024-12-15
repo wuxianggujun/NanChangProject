@@ -84,11 +84,9 @@ def process_excel(df: pl.DataFrame) -> tuple:
         logging.info("初始数据类型转换完成")
 
             # 定义时间范围
-        #start_time = (dt.datetime.now() - dt.timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
         end_time = dt.datetime.now().replace(hour=16, minute=0, second=0, microsecond=0)
         start_time = (end_time - dt.timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
       
-
         logging.info(f"开始处理：{start_time} 到 {end_time} 共三十天的数据...")
 
         dataframe = DataUtils(df).filter_data_range(
@@ -150,6 +148,10 @@ def process_excel(df: pl.DataFrame) -> tuple:
 
         result_df = pl.DataFrame(result_list)
 
+        result_df = DataUtils(result_df).clean_and_unique(
+            unique_columns=["客服流水号"]
+        )
+        
          # 计算重复投诉次数
         repeat_counts = result_df.group_by("区域-受理号码").agg(pl.len().alias("重复投诉次数"))
 

@@ -51,6 +51,7 @@ def process_excel(excel_data: pl.DataFrame, days: int) -> pl.DataFrame:
         | filtered_df["投诉内容"].str.contains("无法拨打出去电话", literal=True)
         | filtered_df["投诉内容"].str.contains("没办法打电话", literal=True)
         | filtered_df["投诉内容"].str.contains("接不了电话", literal=True)
+        | filtered_df["投诉内容"].str.contains("VoLTE开关是否打开：关闭", literal=True)
     )
     
     content_exclude = (

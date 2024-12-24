@@ -51,6 +51,8 @@ def process_excel(excel_data: pl.DataFrame, days: int) -> pl.DataFrame:
         | filtered_df["投诉内容"].str.contains("无法拨打出去电话", literal=True)
         | filtered_df["投诉内容"].str.contains("没办法打电话", literal=True)
         | filtered_df["投诉内容"].str.contains("接不了电话", literal=True)
+        | filtered_df["投诉内容"].str.contains("拨打接听都不行", literal=True)
+        | filtered_df["投诉内容"].str.contains("无法接通和拨打电话", literal=True)
         | filtered_df["投诉内容"].str.contains("VoLTE开关是否打开：关闭", literal=True)
     )
     
@@ -65,6 +67,8 @@ def process_excel(excel_data: pl.DataFrame, days: int) -> pl.DataFrame:
         & ~filtered_df["投诉内容"].str.contains("网络不稳定", literal=True)
         & ~filtered_df["投诉内容"].str.contains("反映信号差", literal=True)
         & ~filtered_df["投诉内容"].str.contains("停机状态", literal=True)
+        & ~filtered_df["投诉内容"].str.contains("无法拨打移动的号码", literal=True)
+        & ~filtered_df["投诉内容"].str.contains("扣费不认可", literal=True)
     )
     
     # 应用投诉内容筛选条件

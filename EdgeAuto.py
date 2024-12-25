@@ -8,6 +8,9 @@ from selenium.webdriver.edge.service import Service
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Optional
 
 # 常量定义 (可根据实际情况修改)
 DEBUGGER_ADDRESS = "localhost:9222"
@@ -185,7 +188,33 @@ def process_work_order(driver, work_order_link):
         return False
 
 
-def get_process_info(driver):
+@dataclass
+class ProcessTimes:
+    """工单处理时间数据结构"""
+    start_time: Optional[datetime] = None          # 开始（主办）时间
+    dispatch_time: Optional[datetime] = None       # 审核派发（主办）时间
+    last_process_time: Optional[datetime] = None   # 最后一次核查处理（主办）时间
+    final_review_time: Optional[datetime] = None   # 结果审核（主办）时间
+    archive_time: Optional[datetime] = None        # 归档（主办）时间
+    timeout_step: str = ""                        # 超时环节
+    timeout_issue: str = ""                       # 超时工单问题定位
+
+def parse_datetime(time_str: str) -> datetime:
+    """解析时间字符串为datetime对象"""
+    try:
+        return datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
+    except Exception as e:
+        print(f"Error parsing datetime: {e}")
+        return None
+
+def calculate_timeout_hours(start: Optional[datetime], end: Optional[datetime]) -> float:
+    """计算两个时间点之间的小时差"""
+    if not start or not end:
+        return 0.0
+    time_diff = end - start
+    return time_diff.total_seconds() / 3600  # 转换为小时
+
+def get_process_info(driver) -> ProcessTimes:
     """获取处理过程信息中的数据"""
     try:
         # 切换到处理过程信息标签
@@ -197,32 +226,118 @@ def get_process_info(driver):
         print("Switched to process info tab")
         time.sleep(1)
 
-        # 获取分页信息
-        pagination = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CLASS_NAME, "ant-pagination"))
-        )
-        
-        # 点击最后一页
-        last_page = WebDriverWait(pagination, 10).until(
-            EC.presence_of_element_located((By.XPATH, 
-                ".//li[contains(@class, 'ant-pagination-item')][last()]"))
-        )
-        driver.execute_script("arguments[0].click();", last_page)
-        print("Navigated to last page")
-        time.sleep(1)
+        # 初始化数据结构
+        process_times = ProcessTimes()
+        latest_process_time = None
+        latest_review_time = None
 
-        # 获取开始环节的处理时间
-        start_time = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.XPATH, 
-                "//tr[.//td[contains(text(), '开始（主办）')]]//td[3]"))
-        ).text
-        print(f"Found start time: {start_time}")
+        # 获取所有页面的数据
+        while True:
+            # 获取当前页面的所有行
+            rows = WebDriverWait(driver, 10).until(
+                EC.presence_of_all_elements_located((By.XPATH, 
+                    "//tr[@class='ant-table-row ant-table-row-level-0']"))
+            )
 
-        return start_time
+            for row in rows:
+                # 获取环节和处理时间
+                step = row.find_element(By.XPATH, ".//td[5]").text
+                process_time_str = row.find_element(By.XPATH, ".//td[3]").text
+                deadline_str = row.find_element(By.XPATH, ".//td[4]").text
+                current_time = parse_datetime(process_time_str)
+                deadline_time = parse_datetime(deadline_str)
+                
+                if not current_time or not deadline_time:
+                    continue
+
+                # 检查是否超时
+                if current_time > deadline_time:
+                    if not process_times.timeout_step:
+                        process_times.timeout_step = step
+                        # 获取超时原因（从展开行获取）
+                        try:
+                            expanded_row = row.find_element(By.XPATH, 
+                                "following-sibling::tr[@class='ant-table-expanded-row ant-table-expanded-row-level-1']")
+                            process_times.timeout_issue = expanded_row.find_element(By.XPATH, ".//p").text
+                        except Exception as e:
+                            print(f"Error getting timeout issue: {e}")
+
+                # 根据环节类型保存时间
+                if "开始（主办）" in step and not process_times.start_time:
+                    process_times.start_time = current_time
+                    print(f"Found start time: {process_time_str}")
+                
+                elif "审核派发（主办）" in step and not process_times.dispatch_time:
+                    process_times.dispatch_time = current_time
+                    print(f"Found dispatch time: {process_time_str}")
+                
+                elif "核查处理（主办）" in step:
+                    # 更新为时间最大的一次
+                    if not latest_process_time or current_time > latest_process_time:
+                        latest_process_time = current_time
+                        process_times.last_process_time = current_time
+                        print(f"Updated process time: {process_time_str}")
+                
+                elif "结果审核（主办）" in step:
+                    # 更新为时间最大的一次
+                    if not latest_review_time or current_time > latest_review_time:
+                        latest_review_time = current_time
+                        process_times.final_review_time = current_time
+                        print(f"Updated final review time: {process_time_str}")
+                
+                elif "归档（主办）" in step:
+                    process_times.archive_time = current_time
+                    print(f"Found archive time: {process_time_str}")
+
+            # 检查是否有下一页
+            next_button = driver.find_element(By.XPATH, 
+                "//li[contains(@class, 'ant-pagination-next')]")
+            
+            if 'ant-pagination-disabled' in next_button.get_attribute('class'):
+                break
+            
+            # 点击下一页
+            driver.execute_script("arguments[0].click();", next_button)
+            time.sleep(1)
+
+        # 获取所有数据后，计算超时环节
+        if process_times.start_time and process_times.dispatch_time:
+            dispatch_hours = calculate_timeout_hours(process_times.start_time, process_times.dispatch_time)
+            print(f"审核派发耗时: {dispatch_hours:.2f}小时")
+            max_hours = dispatch_hours
+            process_times.timeout_step = "审核派发"
+            process_times.timeout_issue = "审核派发环节耗时过长"
+
+        if process_times.dispatch_time and process_times.last_process_time:
+            process_hours = calculate_timeout_hours(process_times.dispatch_time, process_times.last_process_time)
+            print(f"核查处理耗时: {process_hours:.2f}小时")
+            if process_hours > max_hours:
+                max_hours = process_hours
+                process_times.timeout_step = "核查处理"
+                process_times.timeout_issue = "核查处理环节耗时过长"
+
+        if process_times.last_process_time and process_times.final_review_time:
+            review_hours = calculate_timeout_hours(process_times.last_process_time, process_times.final_review_time)
+            print(f"结果审核耗时: {review_hours:.2f}小时")
+            if review_hours > max_hours:
+                max_hours = review_hours
+                process_times.timeout_step = "结果审核"
+                process_times.timeout_issue = "结果审核环节耗时过长"
+
+        if process_times.final_review_time and process_times.archive_time:
+            archive_hours = calculate_timeout_hours(process_times.final_review_time, process_times.archive_time)
+            print(f"归档耗时: {archive_hours:.2f}小时")
+            if archive_hours > max_hours:
+                max_hours = archive_hours
+                process_times.timeout_step = "回访工作"
+                process_times.timeout_issue = "回访工作环节耗时过长"
+
+        print(f"\n最长耗时环节: {process_times.timeout_step}, 耗时: {max_hours:.2f}小时")
+        return process_times
 
     except Exception as e:
         print(f"Error getting process info: {e}")
-        return None
+        return ProcessTimes()
 
 
 def handle_work_order_dialog(driver):
@@ -252,10 +367,16 @@ def handle_work_order_dialog(driver):
         print("Switched to dialog frame")
 
         # 获取处理时间
-        start_time = get_process_info(driver)
-        if start_time:
-            print(f"Processing time retrieved: {start_time}")
-            # TODO: 在这里可以保存或处理获取到的时间
+        process_times = get_process_info(driver)
+        if process_times:
+            print("\n处理时间信息:")
+            print(f"开始时间: {process_times.start_time}")
+            print(f"派发时间: {process_times.dispatch_time}")
+            print(f"最后处理时间: {process_times.last_process_time}")
+            print(f"最终审核时间: {process_times.final_review_time}")
+            print(f"归档时间: {process_times.archive_time}")
+            print(f"超时环节: {process_times.timeout_step}")
+            print(f"超时问题: {process_times.timeout_issue}")
         
         # 切回主文档
         driver.switch_to.default_content()

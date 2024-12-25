@@ -97,49 +97,7 @@ class FileManager:
             logging.error(f"保存数据到工作表时出错: {str(e)}")
             logging.error(f"数据示例: {df.head()}")
             raise
-    # def _save_dataframe_to_sheet(self, worksheet, df: pl.DataFrame):
-    #     """封装写入 Polars DataFrame 到 Excel sheet 的方法"""
-    #     # 将 Polars DataFrame 转为字典列表
-    #     data = df.to_dicts()
-
-    #     # 获取列名
-    #     columns = df.columns
-
-
-    #     # # 修改单元格写入逻辑
-    #     # for row_num, row in tqdm(enumerate(data, start=2), total=len(data), desc="保存数据中"):
-    #     #     for col_num, col_name in enumerate(columns, start=1):
-    #     #         cell = worksheet.cell(row=row_num, column=col_num)
-    #     #     value = row[col_name]
-    #     #     cell.value = value
-            
-    #     #     # 对包含换行符的单元格启用文本换行
-    #     #     if isinstance(value, str) and ('\n' in value):
-    #     #         cell.alignment = Alignment(wrap_text=True, vertical='top')
-    #     #         # 调整行高以适应内容
-    #     #         worksheet.row_dimensions[row_num].height = max(15 * value.count('\n'), 15)
-    
-    #     # # 自动调整列宽
-    #     # for col_num, column in enumerate(worksheet.columns, start=1):
-    #     #     max_length = 0
-    #     #     for cell in column:
-    #     #         try:
-    #     #             if cell.value:
-    #     #                 max_length = max(max_length, len(str(cell.value).split('\n')[0]))
-    #     #         except:
-    #     #             pass
-    #     #     worksheet.column_dimensions[get_column_letter(col_num)].width = min(max_length + 2, 100)
-
-    #     # 写入列名（header）
-    #     for col_num, col_name in enumerate(columns, start=1):
-    #         # 去除列名中的后缀（如 网络类型_1 -> 网络类型）
-    #         cleaned_col_name = re.sub(r"_\d+$", "", col_name)
-    #         worksheet.cell(row=1, column=col_num, value=cleaned_col_name)
-
-    #     # Add the data to the worksheet
-    #     for row_num, row in tqdm(enumerate(data, start=2), total=len(data), desc="保存数据中"):
-    #         for col_num, col_name in enumerate(columns, start=1):
-    #             worksheet.cell(row=row_num, column=col_num, value=row[col_name])
+ 
 
     def _generate_output_path(self, filename: str) -> str:
         """生成输出文件的路径，并检查文件是否存在"""
@@ -207,8 +165,60 @@ class FileManager:
         except Exception as e:
             logging.error(f"读取文件 {file_path} 中的 sheet: {sheet_name} 失败: {e}")
             return pl.DataFrame() if isinstance(sheet_name, (str, int)) else {}
-    
 
+    def read_csv(self, file_path: str = None, dir_name: str = None, file_name: str = None, separator: str = ",",
+                 has_header: bool = True,
+                 new_columns: list[str] = None, encoding: str = "utf-8",
+                 show_logs: bool = False, **kwargs) -> pl.DataFrame:
+        """
+        使用 Polars 读取 CSV 文件。
+
+        参数:
+        - file_path: CSV 文件的完整路径。
+        - dir_name: 目录名，如果提供，则会在 base_dir 下的这个目录中查找 file_name。
+        - file_name: 文件名，如果提供，则会在 base_dir 或 dir_name 指定的目录下查找这个文件。
+        - separator: 字段分隔符，默认为逗号。
+        - has_header: 文件是否包含标题行，默认为 True。
+        - new_columns: 可选，为数据列指定新的列名。
+        - encoding: 文件编码，默认为 "utf-8"。
+        - show_logs: 是否显示读取日志，默认为 False。
+        - **kwargs: 传递给 pl.read_csv 的其他关键字参数。
+
+        返回:
+        - pl.DataFrame: 读取的数据。
+        """
+        try:
+            if file_path is None:
+                if file_name is None:
+                    raise ValueError("必须提供 file_path 或 file_name")
+                if dir_name:
+                    file_path = os.path.join(self.base_dir, dir_name, file_name)
+                else:
+                    file_path = os.path.join(self.base_dir, file_name)
+
+            if not os.path.exists(file_path):
+                logging.error(f"文件不存在: {file_path}")
+                return pl.DataFrame()
+
+            data = pl.read_csv(
+                file_path,
+                separator=separator,
+                has_header=has_header,
+                new_columns=new_columns,
+                encoding=encoding,
+                **kwargs
+            )
+
+            if show_logs:
+                logging.info(f"成功读取 {file_path}")
+
+            return data
+
+        except Exception as e:
+            logging.error(f"读取文件 {file_path} 失败: {e}")
+            return pl.DataFrame()
+            
+        
     def save_to_excel(self, df: pl.DataFrame, file_name: str,file_path:str = None):
         try:
             if df is None:

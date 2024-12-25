@@ -23,7 +23,7 @@ def launch_edge_with_remote_debugging(debugger_address=DEBUGGER_ADDRESS):
 
 def check_work_order_query_page(driver):
     try:
-        # 检查“工单查询”标签页是否处于激活状态
+        # 检查"工单查询"标签页是否处于激活状态
         element = driver.find_element(By.XPATH, "//td[@title='工单查询' and contains(@class, 'tab_item2_selected')]")
         print("当前激活的页面是'工单查询'。")
 
@@ -40,6 +40,8 @@ def check_work_order_query_page(driver):
         )
         tab_element.click()
         return False
+
+
 
 
 def get_new_detail_tabs(driver):
@@ -78,6 +80,221 @@ def get_new_detail_tabs(driver):
         return []
 
 
+def switch_to_tab(driver, tab_id):
+    """切换到指定标签页"""
+    try:
+        print(f"Switching to tab ID: {tab_id}")
+        tab = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.ID, tab_id))
+        )
+        driver.execute_script("arguments[0].click();", tab)
+        time.sleep(1)
+        return True
+    except Exception as e:
+        print(f"Error switching to tab: {e}")
+        return False
+
+
+def switch_to_iframe(driver, iframe_id):
+    """切换到指定iframe"""
+    try:
+        print(f"Looking for iframe with ID: {iframe_id}")
+        WebDriverWait(driver, 10).until(
+            EC.frame_to_be_available_and_switch_to_it((By.ID, iframe_id))
+        )
+        print("Successfully switched to iframe")
+        return True
+    except Exception as e:
+        print(f"Error switching to iframe: {e}")
+        return False
+
+
+def get_headquarters_order_count(driver):
+    """获取总部工单信息数量"""
+    try:
+        headquarters_tab = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, 
+                "//div[@data-node-key='10015relationsheet']//span[contains(text(), '总部工单信息')]/span"))
+        )
+        count = int(headquarters_tab.text)
+        print(f"总部工单信息数量: {count}")
+        return count
+    except Exception as e:
+        print(f"Error getting headquarters order count: {e}")
+        return 0
+
+
+def close_empty_tab(driver, tab_id):
+    """关闭空工单标签页"""
+    try:
+        driver.switch_to.default_content()
+        close_button = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, 
+                f"//td[@title='新工单详情']/following-sibling::td//div[contains(@class, 'tab_close')]"))
+        )
+        driver.execute_script("arguments[0].click();", close_button)
+        print(f"关闭了总部工单信息数量为0的标签页: {tab_id}")
+        time.sleep(1)
+        return True
+    except Exception as e:
+        print(f"Error closing empty tab: {e}")
+        return False
+
+
+def process_headquarters_orders(driver):
+    """处理总部工单"""
+    try:
+        # 点击总部工单信息标签
+        headquarters_tab = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, "//div[@data-node-key='10015relationsheet']"))
+        )
+        driver.execute_script("arguments[0].click();", headquarters_tab)
+        time.sleep(1)
+
+        # 获取工单列表
+        work_orders = WebDriverWait(driver, 10).until(
+            EC.presence_of_all_elements_located((By.XPATH, 
+                "//td[@class='ant-table-cell']//span[@title and @style='color: blue; cursor: pointer;']"))
+        )
+        
+        if not work_orders:
+            print("No work order links found")
+            return False
+
+        print(f"Found {len(work_orders)} work order links")
+        return process_work_order(driver, work_orders[0])
+    except Exception as e:
+        print(f"Error processing headquarters orders: {e}")
+        return False
+
+
+def process_work_order(driver, work_order_link):
+    """处理单个工单"""
+    try:
+        work_order_number = work_order_link.get_attribute('title')
+        print(f"Processing work order: {work_order_number}")
+        
+        # 点击工单链接
+        driver.execute_script("arguments[0].click();", work_order_link)
+        print("Clicked work order link")
+        
+        # 切回主文档并处理弹窗
+        return handle_work_order_dialog(driver)
+    except Exception as e:
+        print(f"Error processing work order: {e}")
+        return False
+
+
+def get_process_info(driver):
+    """获取处理过程信息中的数据"""
+    try:
+        # 切换到处理过程信息标签
+        process_tab = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, 
+                "//div[@data-node-key='sheetprocess']"))
+        )
+        driver.execute_script("arguments[0].click();", process_tab)
+        print("Switched to process info tab")
+        time.sleep(1)
+
+        # 获取分页信息
+        pagination = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CLASS_NAME, "ant-pagination"))
+        )
+        
+        # 点击最后一页
+        last_page = WebDriverWait(pagination, 10).until(
+            EC.presence_of_element_located((By.XPATH, 
+                ".//li[contains(@class, 'ant-pagination-item')][last()]"))
+        )
+        driver.execute_script("arguments[0].click();", last_page)
+        print("Navigated to last page")
+        time.sleep(1)
+
+        # 获取开始环节的处理时间
+        start_time = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, 
+                "//tr[.//td[contains(text(), '开始（主办）')]]//td[3]"))
+        ).text
+        print(f"Found start time: {start_time}")
+
+        return start_time
+
+    except Exception as e:
+        print(f"Error getting process info: {e}")
+        return None
+
+
+def handle_work_order_dialog(driver):
+    """处理工单弹窗"""
+    try:
+        driver.switch_to.default_content()
+        print("Waiting for dialog div to appear...")
+        
+        dialog_div = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, "_DialogDiv_1fk"))
+        )
+        
+        if not dialog_div.is_displayed():
+            print("Dialog div is not visible")
+            return False
+
+        print("Dialog div is visible")
+        
+        # 切换到弹窗iframe
+        dialog_frame = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, "_DialogFrame_1fk"))
+        )
+        print("Dialog frame found")
+        
+        # 切换到iframe
+        driver.switch_to.frame("_DialogFrame_1fk")
+        print("Switched to dialog frame")
+
+        # 获取处理时间
+        start_time = get_process_info(driver)
+        if start_time:
+            print(f"Processing time retrieved: {start_time}")
+            # TODO: 在这里可以保存或处理获取到的时间
+        
+        # 切回主文档
+        driver.switch_to.default_content()
+        
+        return close_dialog(driver)
+
+    except Exception as e:
+        print(f"Error handling work order dialog: {e}")
+        driver.switch_to.default_content()
+        return False
+
+
+def close_dialog(driver):
+    """关闭工单弹窗"""
+    try:
+        print("Attempting to close dialog...")
+        driver.execute_script("""
+            if (typeof fixProgress === 'function') {
+                fixProgress();
+            }
+            if (Dialog && Dialog.getInstance('1fk')) {
+                Dialog.getInstance('1fk').cancelButton.onclick.apply(
+                    Dialog.getInstance('1fk').cancelButton,[]
+                );
+            }
+        """)
+        print("Dialog close command executed")
+        
+        # 等待弹窗消失
+        WebDriverWait(driver, 10).until_not(
+            EC.presence_of_element_located((By.ID, "_DialogDiv_1fk"))
+        )
+        print("Dialog confirmed closed")
+        return True
+    except Exception as e:
+        print(f"Error closing dialog: {e}")
+        return False
+
+
 def process_detail_tabs(driver):
     """处理所有工单详情标签页"""
     try:
@@ -89,126 +306,21 @@ def process_detail_tabs(driver):
             if tab_id in processed_tabs:
                 continue
 
-            try:
-                print(f"Processing tab ID: {tab_id}")
-                
-                # 激活标签页
-                tab = WebDriverWait(driver, 10).until(
-                    EC.element_to_be_clickable((By.ID, tab_id))
-                )
-                driver.execute_script("arguments[0].click();", tab)
-                time.sleep(1)
-
-                # 切换到对应的iframe
-                iframe_id = f"page_{tab_id}"
-                print(f"Looking for iframe with ID: {iframe_id}")
-                iframe = WebDriverWait(driver, 10).until(
-                    EC.frame_to_be_available_and_switch_to_it((By.ID, iframe_id))
-                )
-                print("Successfully switched to iframe")
-
-                # 等待并检查总部工单信息数量
-                headquarters_tab = WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.XPATH, 
-                        "//div[@data-node-key='10015relationsheet']//span[contains(text(), '总部工单信息')]/span"))
-                )
-                count = int(headquarters_tab.text)
-                print(f"总部工单信息数量: {count}")
-
-                if count == 0:
-                    # 切回主文档以关闭标签页
-                    driver.switch_to.default_content()
-                    close_button = WebDriverWait(driver, 10).until(
-                        EC.element_to_be_clickable((By.XPATH, 
-                            f"//td[@title='新工单详情']/following-sibling::td//div[contains(@class, 'tab_close')]"))
-                    )
-                    driver.execute_script("arguments[0].click();", close_button)
-                    print(f"关闭了总部工单信息数量为0的标签页: {tab_id}")
-                    time.sleep(1)
-                else:
-                    # 点击总部工单信息标签
-                    headquarters_tab_element = WebDriverWait(driver, 10).until(
-                        EC.element_to_be_clickable((By.XPATH, "//div[@data-node-key='10015relationsheet']"))
-                    )
-                    driver.execute_script("arguments[0].click();", headquarters_tab_element)
-                    time.sleep(1)
-
-                    try:
-                        # 等待工单列表加载
-                        work_order_elements = WebDriverWait(driver, 10).until(
-                            EC.presence_of_all_elements_located((By.XPATH, 
-                                "//td[@class='ant-table-cell']//span[@title and @style='color: blue; cursor: pointer;']"))
-                        )
-
-                        if work_order_elements:
-                            print(f"Found {len(work_order_elements)} work order links")
-                            # 获取第一个工单链接
-                            work_order_link = work_order_elements[0]
-                            work_order_number = work_order_link.get_attribute('title')
-                            print(f"Clicking work order: {work_order_number}")
-                            
-                            # 点击工单链接
-                            driver.execute_script("arguments[0].click();", work_order_link)
-                            print("Clicked work order link")
-                            
-                            # 切回主文档
-                            driver.switch_to.default_content()
-                            
-                            # 等待弹窗出现
-                            print("Waiting for dialog div to appear...")
-                            dialog_div = WebDriverWait(driver, 10).until(
-                                EC.presence_of_element_located((By.ID, "_DialogDiv_1fk"))
-                            )
-                            
-                            if dialog_div.is_displayed():
-                                print("Dialog div is visible")
-                                
-                                # 等待iframe加载
-                                dialog_frame = WebDriverWait(driver, 10).until(
-                                    EC.presence_of_element_located((By.ID, "_DialogFrame_1fk"))
-                                )
-                                print("Dialog frame found")
-                                
-                                # TODO: 在这里处理iframe中的内容
-                                
-                                # 关闭弹窗
-                                print("Attempting to close dialog...")
-                                try:
-                                    driver.execute_script("""
-                                        if (typeof fixProgress === 'function') {
-                                            fixProgress();
-                                        }
-                                        if (Dialog && Dialog.getInstance('1fk')) {
-                                            Dialog.getInstance('1fk').cancelButton.onclick.apply(
-                                                Dialog.getInstance('1fk').cancelButton,[]
-                                            );
-                                        }
-                                    """)
-                                    print("Dialog close command executed")
-                                    
-                                    # 等待弹窗消失
-                                    WebDriverWait(driver, 10).until_not(
-                                        EC.presence_of_element_located((By.ID, "_DialogDiv_1fk"))
-                                    )
-                                    print("Dialog confirmed closed")
-                                except Exception as e:
-                                    print(f"Error closing dialog: {e}")
-                            else:
-                                print("Dialog div is not visible")
-                                
-                        else:
-                            print("No work order links found")
-
-                    except Exception as e:
-                        print(f"Error processing work order details: {e}")
-                        driver.switch_to.default_content()
-
-                processed_tabs.add(tab_id)
-
-            except Exception as e:
-                print(f"Error processing tab {tab_id}: {e}")
-                driver.switch_to.default_content()
+            if not switch_to_tab(driver, tab_id):
                 continue
+
+            iframe_id = f"page_{tab_id}"
+            if not switch_to_iframe(driver, iframe_id):
+                continue
+
+            count = get_headquarters_order_count(driver)
+            
+            if count == 0:
+                close_empty_tab(driver, tab_id)
+            else:
+                process_headquarters_orders(driver)
+
+            processed_tabs.add(tab_id)
 
     except Exception as e:
         print(f"Error in process_detail_tabs: {e}")

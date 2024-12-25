@@ -206,14 +206,23 @@ class ProcessDataFrame:
 def handle_search_results(driver) -> ProcessDataFrame:
     """处理搜索结果并返回处理时间信息"""
     try:
-        # 获取所有工单链接
+        # 切换到默认内容
         driver.switch_to.default_content()
+        
+        # 确保工单查询标签页处于激活状态
+        query_tab = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, "//td[@title='工单查询']"))
+        )
+        if 'tab_item2_selected' not in query_tab.get_attribute('class'):
+            query_tab.click()
+            time.sleep(1)
+
+        # 切换到工单查询iframe并点击工单链接
         iframe = WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.ID, "page_gg9902040500"))
         )
         driver.switch_to.frame(iframe)
 
-        # 等待列表加载
         links = WebDriverWait(driver, 10).until(
             EC.presence_of_all_elements_located(
                 (By.XPATH, "//a[contains(@onclick, 'datagrid.openNewDetail')]")
@@ -226,17 +235,59 @@ def handle_search_results(driver) -> ProcessDataFrame:
 
         # 处理第一个工单
         work_order = links[0]
-        print(f"Processing work order: {work_order.text}")
-
-        if click_work_order_link(driver, work_order):
-            process_times = get_process_info(driver)
-            close_dialog(driver)
-            return process_times
+        onclick = work_order.get_attribute('onclick')
+        if onclick:
+            driver.execute_script(onclick)
+            time.sleep(2)  # 等待新页面加载
+            
+            # 切换到默认内容以查找新打开的iframe
+            driver.switch_to.default_content()
+            
+            # 等待并获取新打开的iframe
+            new_iframes = WebDriverWait(driver, 10).until(
+                EC.presence_of_all_elements_located((By.XPATH, "//iframe[contains(@id, '_new')]"))
+            )
+            
+            for iframe in new_iframes:
+                try:
+                    iframe_id = iframe.get_attribute('id')
+                    print(f"尝试切换到iframe: {iframe_id}")
+                    
+                    # 切换到新iframe
+                    driver.switch_to.frame(iframe)
+                    
+                    # 使用更精确的XPath定位受理渠道
+                    channel_xpath = "//span[contains(@class, 'ant-descriptions-item-label') and contains(text(), '受理渠道')]/following-sibling::span[contains(@class, 'ant-descriptions-item-content')]"
+                    
+                    channel_element = WebDriverWait(driver, 5).until(
+                        EC.presence_of_element_located((By.XPATH, channel_xpath))
+                    )
+                    
+                    channel_text = channel_element.text.strip()
+                    print(f"找到受理渠道: {channel_text}")
+                    
+                    if "10010客服热线" in channel_text:
+                        print("检测到10010工单，直接获取时间信息")
+                        process_times = get_process_info(driver)
+                        driver.switch_to.default_content()
+                        return process_times
+                    else:
+                        print(f"非10010工单，当前受理渠道: {channel_text}")
+                        driver.switch_to.default_content()
+                        
+                except Exception as e:
+                    print(f"在iframe {iframe_id} 中查找受理渠道时出错: {e}")
+                    driver.switch_to.default_content()
+                    continue
+            
+            # 如果没有找到10010工单或出现错误，处理弹窗
+            return handle_work_order_dialog(driver)
 
         return None
 
     except Exception as e:
         print(f"处理搜索结果时出错: {e}")
+        driver.switch_to.default_content()
         return None
 
 
@@ -714,7 +765,7 @@ def main():
             return
 
         driver = launch_edge_with_remote_debugging(DEBUGGER_ADDRESS)
-        # input("请确保已在 Edge 浏览器中打开目标页面并登录，然后按回车继续执行自动化操作...")
+        # input("请确保已在 Edge 浏览器中打开目标页面并登录，然后按回车继续执行��动化操作...")
 
         check_work_order_query_page(driver)
 

@@ -208,6 +208,7 @@ def handle_search_results(driver) -> ProcessDataFrame:
     try:
         # 切换到默认内容
         driver.switch_to.default_content()
+        print("已切换到默认内容")
         
         # 确保工单查询标签页处于激活状态
         query_tab = WebDriverWait(driver, 10).until(
@@ -216,13 +217,16 @@ def handle_search_results(driver) -> ProcessDataFrame:
         if 'tab_item2_selected' not in query_tab.get_attribute('class'):
             query_tab.click()
             time.sleep(1)
+        print("工单查询标签已激活，其他标签已关闭")
 
-        # 切换到工单查询iframe并点击工单链接
+        # 切换到工单查询iframe
         iframe = WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.ID, "page_gg9902040500"))
         )
         driver.switch_to.frame(iframe)
+        print("已切换到工单查询主frame")
 
+        # 查找工单链接
         links = WebDriverWait(driver, 10).until(
             EC.presence_of_all_elements_located(
                 (By.XPATH, "//a[contains(@onclick, 'datagrid.openNewDetail')]")
@@ -230,15 +234,16 @@ def handle_search_results(driver) -> ProcessDataFrame:
         )
 
         if not links:
-            print("未找到相关工单")
+            print("未找到工单链接")
             return None
 
         # 处理第一个工单
         work_order = links[0]
         onclick = work_order.get_attribute('onclick')
         if onclick:
+            print(f"点击工单链接: {onclick}")
             driver.execute_script(onclick)
-            time.sleep(2)  # 等待新页面加载
+            time.sleep(2)
             
             # 切换到默认内容以查找新打开的iframe
             driver.switch_to.default_content()
@@ -253,12 +258,10 @@ def handle_search_results(driver) -> ProcessDataFrame:
                     iframe_id = iframe.get_attribute('id')
                     print(f"尝试切换到iframe: {iframe_id}")
                     
-                    # 切换到新iframe
                     driver.switch_to.frame(iframe)
                     
-                    # 使用更精确的XPath定位受理渠道
+                    # 查找受理渠道
                     channel_xpath = "//span[contains(@class, 'ant-descriptions-item-label') and contains(text(), '受理渠道')]/following-sibling::span[contains(@class, 'ant-descriptions-item-content')]"
-                    
                     channel_element = WebDriverWait(driver, 5).until(
                         EC.presence_of_element_located((By.XPATH, channel_xpath))
                     )
@@ -267,7 +270,7 @@ def handle_search_results(driver) -> ProcessDataFrame:
                     print(f"找到受理渠道: {channel_text}")
                     
                     if "10010客服热线" in channel_text:
-                        print("检测到10010工单，直接获取时间信息")
+                        print("检测到10010工单，获取时间信息")
                         process_times = get_process_info_10010(driver)
                         driver.switch_to.default_content()
                         return process_times
@@ -276,11 +279,10 @@ def handle_search_results(driver) -> ProcessDataFrame:
                         driver.switch_to.default_content()
                         
                 except Exception as e:
-                    print(f"在iframe {iframe_id} 中查找受理渠道时出错: {e}")
+                    print(f"处理iframe {iframe_id} 时出错: {e}")
                     driver.switch_to.default_content()
                     continue
             
-            # 如果没有找到10010工单或出现错误，处理弹窗
             return handle_work_order_dialog(driver)
 
         return None
@@ -386,23 +388,95 @@ def process_business_number(driver, row_data: dict, file_manager: FileManager) -
         sheet_code = str(row_data.get('工单流水号', ''))
         business_number = str(row_data.get('业务号码', ''))
 
-        # 输入搜索条件
-        if not input_search_criteria(driver, support_code, sheet_code, business_number):
-            return None
+        # 首先尝试使用工单流水号搜索
+        if sheet_code and sheet_code.strip() and sheet_code != '#N/A':
+            print(f"尝试使用工单流水号搜索: {sheet_code}")
+            
+            # 清空并输入工单号
+            sheet_code_input = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.ID, "sheetCode"))
+            )
+            sheet_code_input.clear()
+            sheet_code_input.send_keys(sheet_code)
+            
+            # 设置时间范围
+            if set_search_date_range(driver, sheet_code):
+                # 点击搜索按钮
+                search_button = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, "//button[contains(@onclick, 'datagrid.search()')]"))
+                )
+                search_button.click()
+                time.sleep(1)
 
-        # 无论使用哪种方式查询，都使用工单流水号的时间来设置范围
-        if not set_search_date_range(driver, sheet_code):
-            return None
+                # 检查是否有搜索结果
+                try:
+                    links = WebDriverWait(driver, 5).until(
+                        EC.presence_of_all_elements_located(
+                            (By.XPATH, "//a[contains(@onclick, 'datagrid.openNewDetail')]")
+                        )
+                    )
+                    if links:
+                        print("工单号搜索成功，处理搜索结果")
+                        return handle_search_results(driver)
+                except:
+                    print("工单号搜索无结果")
 
-        # 点击搜索按钮
-        search_button = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.XPATH, "//button[contains(@onclick, 'datagrid.search()')]"))
-        )
-        search_button.click()
-        time.sleep(1)  # 等待搜索结果加载
+        # 如果工单号搜索失败，尝试使用业务号码搜索
+        if business_number and business_number.strip():
+            print(f"尝试使用业务号码搜索: {business_number}")
+            
+            # 清空所有搜索条件
+            sheet_code_input = driver.find_element(By.ID, "sheetCode")
+            business_number_input = driver.find_element(By.ID, "businessNo")
+            sheet_code_input.clear()
+            business_number_input.clear()
+            
+            # 输入业务号码
+            business_number_input.send_keys(business_number)
+            
+            # 设置较长的时间范围（比如最近3个月）
+            current_date = dt.datetime.now()
+            start_date = current_date - dt.timedelta(days=90)
+            end_date = current_date
+            
+            # 设置开始时间
+            accept_time_begin = driver.find_element(By.ID, "acceptTimeBegin")
+            accept_time_begin.clear()
+            driver.execute_script(
+                f"arguments[0].value = '{start_date.strftime('%Y-%m-%d %H:%M:%S')}';", 
+                accept_time_begin
+            )
 
-        # 处理搜索结果
-        return handle_search_results(driver)
+            # 设置结束时间
+            accept_time_end = driver.find_element(By.ID, "acceptTimeEnd")
+            accept_time_end.clear()
+            driver.execute_script(
+                f"arguments[0].value = '{end_date.strftime('%Y-%m-%d %H:%M:%S')}';", 
+                accept_time_end
+            )
+
+            # 点击搜索按钮
+            search_button = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, "//button[contains(@onclick, 'datagrid.search()')]"))
+            )
+            search_button.click()
+            time.sleep(1)
+
+            # 检查是否有搜索结果
+            try:
+                links = WebDriverWait(driver, 5).until(
+                    EC.presence_of_all_elements_located(
+                        (By.XPATH, "//a[contains(@onclick, 'datagrid.openNewDetail')]")
+                    )
+                )
+                if links:
+                    print("业务号码搜索成功，处理搜索结果")
+                    return handle_search_results(driver)
+            except:
+                print("业务号码搜索无结果")
+
+        print("工单号和业务号码搜索均无结果")
+        return None
 
     except Exception as e:
         print(f"处理记录时出错: {e}")

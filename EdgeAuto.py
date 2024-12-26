@@ -157,12 +157,12 @@ def process_headquarters_orders(driver, target_sheet_code: str) -> bool:
         driver.execute_script("arguments[0].click();", headquarters_tab)
         time.sleep(1)
 
-        # 获取工单列表中的所有工单
+        # 修改选择器，只获取工单流水号列中的链接
         work_orders = WebDriverWait(driver, 10).until(
-            EC.presence_of_all_elements_located((By.XPATH, 
-                "//td[@class='ant-table-cell']//span[@title and @style='color: blue; cursor: pointer;']"))
+            EC.presence_of_all_elements_located((By.XPATH,
+                                                 "//td[contains(@class, 'ant-table-cell')]/span[@title and contains(@title, '-') and @style='color: blue; cursor: pointer;']"))
         )
-        
+
         if not work_orders:
             print("未找到工单链接")
             return False

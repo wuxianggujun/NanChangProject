@@ -47,8 +47,6 @@ def check_work_order_query_page(driver):
         return False
 
 
-
-
 def get_new_detail_tabs(driver):
     """获取所有新工单详情标签页的ID"""
     try:
@@ -118,8 +116,8 @@ def get_headquarters_order_count(driver):
     """获取总部工单信息数量"""
     try:
         headquarters_tab = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.XPATH, 
-                "//div[@data-node-key='10015relationsheet']//span[contains(text(), '总部工单信息')]/span"))
+            EC.presence_of_element_located((By.XPATH,
+                                            "//div[@data-node-key='10015relationsheet']//span[contains(text(), '总部工单信息')]/span"))
         )
         count = int(headquarters_tab.text)
         print(f"总部工单信息数量: {count}")
@@ -134,8 +132,8 @@ def close_empty_tab(driver, tab_id):
     try:
         driver.switch_to.default_content()
         close_button = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.XPATH, 
-                f"//td[@title='新工单详情']/following-sibling::td//div[contains(@class, 'tab_close')]"))
+            EC.element_to_be_clickable((By.XPATH,
+                                        f"//td[@title='新工单详情']/following-sibling::td//div[contains(@class, 'tab_close')]"))
         )
         driver.execute_script("arguments[0].click();", close_button)
         print(f"关闭了总部工单信息数量为0的标签页: {tab_id}")
@@ -153,7 +151,7 @@ def process_headquarters_orders(driver, target_sheet_code: str) -> bool:
         headquarters_tab = WebDriverWait(driver, 10).until(
             EC.element_to_be_clickable((By.XPATH, "//div[@data-node-key='10015relationsheet']"))
         )
-        
+
         driver.execute_script("arguments[0].click();", headquarters_tab)
         time.sleep(1)
 
@@ -168,7 +166,7 @@ def process_headquarters_orders(driver, target_sheet_code: str) -> bool:
             return False
 
         print(f"找到 {len(work_orders)} 个工单链接")
-        
+
         # 遍历工单列表，查找匹配的工单流水号
         for work_order in work_orders:
             try:
@@ -209,11 +207,11 @@ def process_work_order(driver, work_order_link):
     try:
         work_order_number = work_order_link.get_attribute('title')
         print(f"Processing work order: {work_order_number}")
-        
+
         # 点击工单链接
         driver.execute_script("arguments[0].click();", work_order_link)
         print("Clicked work order link")
-        
+
         # 切回主文档并处理弹窗
         return handle_work_order_dialog(driver)
     except Exception as e:
@@ -221,17 +219,16 @@ def process_work_order(driver, work_order_link):
         return False
 
 
-
 @dataclass
 class ProcessDataFrame:
     """工单处理时间数据结构"""
-    start_time: Optional[datetime] = None          # 开始（主办）时间
-    dispatch_time: Optional[datetime] = None       # 审核派发（主办）时间
-    last_process_time: Optional[datetime] = None   # 最后一次核查处理（主办）时间
-    final_review_time: Optional[datetime] = None   # 结果审核（主办）时间
-    archive_time: Optional[datetime] = None        # 归档（主办）时间
-    timeout_step: str = ""                        # 超时环节
-    timeout_issue: str = ""                       # 超时工单问题定位
+    start_time: Optional[datetime] = None  # 开始（主办）时间
+    dispatch_time: Optional[datetime] = None  # 审核派发（主办）时间
+    last_process_time: Optional[datetime] = None  # 最后一次核查处理（主办）时间
+    final_review_time: Optional[datetime] = None  # 结果审核（主办）时间
+    archive_time: Optional[datetime] = None  # 归档（主办）时间
+    timeout_step: str = ""  # 超时环节
+    timeout_issue: str = ""  # 超时工单问题定位
 
 
 def close_current_tab(driver):
@@ -239,8 +236,8 @@ def close_current_tab(driver):
     try:
         # 查找并点击关闭按钮
         close_button = WebDriverWait(driver, 5).until(
-            EC.element_to_be_clickable((By.XPATH, 
-                "//td[contains(@title, '新工单详情')]/following-sibling::td//div[contains(@class, 'tab_close')]"))
+            EC.element_to_be_clickable((By.XPATH,
+                                        "//td[contains(@title, '新工单详情')]/following-sibling::td//div[contains(@class, 'tab_close')]"))
         )
         close_button.click()
         time.sleep(1)
@@ -248,13 +245,14 @@ def close_current_tab(driver):
     except Exception as e:
         print(f"关闭标签页时出错: {e}")
 
+
 def handle_search_results(driver, row_data: dict) -> ProcessDataFrame:
     """处理搜索结果并返回处理时间信息"""
     try:
         # 切换到默认内容
         driver.switch_to.default_content()
         print("已切换到默认内容")
-        
+
         # 确保工单查询标签页处于激活状态
         query_tab = WebDriverWait(driver, 10).until(
             EC.element_to_be_clickable((By.XPATH, "//td[@title='工单查询']"))
@@ -277,45 +275,47 @@ def handle_search_results(driver, row_data: dict) -> ProcessDataFrame:
                 (By.XPATH, "//a[contains(@onclick, 'datagrid.openNewDetail')]")
             )
         )
-        
+
         print(f"找到 {len(links)} 个工单")
+        
+        result = None
         
         for index, work_order in enumerate(links):
             try:
-                # 获取并执行onclick事件
+                print(f"\n处理第 {index + 1} 个工单")
                 onclick = work_order.get_attribute('onclick')
                 if onclick:
                     print(f"点击工单链接: {onclick}")
                     driver.execute_script(onclick)
                     time.sleep(2)
-                    
+
                     # 切换到默认内容以查找新打开的iframe
                     driver.switch_to.default_content()
-                    
+    
                     # 等待并获取新打开的iframe
                     new_iframes = WebDriverWait(driver, 10).until(
                         EC.presence_of_all_elements_located((By.XPATH, "//iframe[contains(@id, '_new')]"))
                     )
-                    
+    
                     for iframe in new_iframes:
                         try:
                             iframe_id = iframe.get_attribute('id')
                             print(f"尝试切换到iframe: {iframe_id}")
-                            
+    
                             driver.switch_to.frame(iframe)
-                            
+    
                             # 查找受理渠道
                             channel_xpath = "//span[contains(@class, 'ant-descriptions-item-label') and contains(text(), '受理渠道')]/following-sibling::span[contains(@class, 'ant-descriptions-item-content')]"
                             channel_element = WebDriverWait(driver, 5).until(
                                 EC.presence_of_element_located((By.XPATH, channel_xpath))
                             )
-                            
+    
                             channel_text = channel_element.text.strip()
                             print(f"找到受理渠道: {channel_text}")
-                            
+    
                             # 判断处理方式
                             is_10010 = any(x in channel_text.lower() for x in ['10010', '客服热线'])
-                            
+    
                             if is_10010:
                                 print(f"处理10010工单，受理渠道: {channel_text}")
                                 result = get_process_info_10010(driver)
@@ -324,28 +324,33 @@ def handle_search_results(driver, row_data: dict) -> ProcessDataFrame:
                                 # 从 row_data 中获取工单流水号
                                 sheet_code = str(row_data.get('工单流水号', ''))
                                 result = process_headquarters_orders(driver, sheet_code)
-                                
-                            driver.switch_to.default_content()
-
+    
                             if result:
+                                print("成功获取工单信息，准备关闭页面")
+                                driver.switch_to.default_content()
+                                close_current_tab(driver)
                                 return result
+
+                            # 如果没有获取到结果，关闭当前页面继续下一个
+                            print("未获取到工单信息，继续下一个")
+                            driver.switch_to.default_content()
                             close_current_tab(driver)
-                            
-                            
+                            break
+
                         except Exception as e:
                             print(f"处理iframe {iframe_id} 时出错: {str(e)}")
                             driver.switch_to.default_content()
                             close_current_tab(driver)
                             continue
-                    
+
             except Exception as e:
-                print(f"处理第{index+1}个工单时出错: {str(e)}")
+                print(f"处理第{index + 1}个工单时出错: {str(e)}")
                 driver.switch_to.default_content()
                 close_current_tab(driver)
                 continue
                 
-        return None
-        
+        return result
+
     except Exception as e:
         print(f"处理搜索结果时出错: {str(e)}")
         driver.switch_to.default_content()
@@ -393,12 +398,13 @@ def input_search_criteria(driver, support_code: str, sheet_code: str, business_n
         print(f"输入搜索条件时出错: {e}")
         return False
 
+
 def parse_sheet_code_date(sheet_code: str) -> Optional[dt.datetime]:
     """从工单流水号解析日期"""
     try:
         if not sheet_code or sheet_code == '#N/A':
             return None
-            
+
         # 工单号格式：TS202410161712105399
         # 提取年月日: 20241016
         date_str = sheet_code[2:10]
@@ -406,6 +412,7 @@ def parse_sheet_code_date(sheet_code: str) -> Optional[dt.datetime]:
     except Exception as e:
         print(f"解析工单流水号日期失败: {e}")
         return None
+
 
 def set_search_date_range(driver, sheet_code: str) -> bool:
     """根据工单流水号设置搜索时间范围"""
@@ -419,7 +426,7 @@ def set_search_date_range(driver, sheet_code: str) -> bool:
         start_date = sheet_date - dt.timedelta(days=1)
         end_date = start_date + dt.timedelta(days=30)
         print(f"设置查询时间范围: {start_date.date()} 到 {end_date.date()}")
-        
+
         start_date_str = start_date.strftime('%Y-%m-%d %H:%M:%S')
         end_date_str = end_date.strftime('%Y-%m-%d %H:%M:%S')
 
@@ -432,12 +439,13 @@ def set_search_date_range(driver, sheet_code: str) -> bool:
         accept_time_end = driver.find_element(By.ID, "acceptTimeEnd")
         accept_time_end.clear()
         driver.execute_script(f"arguments[0].value = '{end_date_str}';", accept_time_end)
-        
+
         return True
 
     except Exception as e:
         print(f"设置时间范围时出错: {e}")
         return False
+
 
 def process_business_number(driver, row_data: dict, file_manager: FileManager) -> ProcessDataFrame:
     """处理单个业务记录"""
@@ -449,7 +457,7 @@ def process_business_number(driver, row_data: dict, file_manager: FileManager) -
         reset_button.click()
         print("已清空表单数据")
         time.sleep(1)  # 等待表单清空
-        
+
         # 获取支撑系统工单号、工单流水号和业务号码
         support_code = str(row_data.get('支撑系统工单号', ''))
         sheet_code = str(row_data.get('工单流水号', ''))
@@ -458,14 +466,14 @@ def process_business_number(driver, row_data: dict, file_manager: FileManager) -
         # 首先尝试使用工单流水号搜索
         if sheet_code and sheet_code.strip() and sheet_code != '#N/A':
             print(f"尝试使用工单流水号搜索: {sheet_code}")
-            
+
             # 清空并输入工单号
             sheet_code_input = WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.ID, "sheetCode"))
             )
             sheet_code_input.clear()
             sheet_code_input.send_keys(sheet_code)
-            
+
             # 设置时间范围
             if set_search_date_range(driver, sheet_code):
                 # 点击搜索按钮
@@ -491,26 +499,26 @@ def process_business_number(driver, row_data: dict, file_manager: FileManager) -
         # 如果工单号搜索失败，尝试使用业务号码搜索
         if business_number and business_number.strip():
             print(f"尝试使用业务号码搜索: {business_number}")
-            
+
             # 清空所有搜索条件
             sheet_code_input = driver.find_element(By.ID, "sheetCode")
             business_number_input = driver.find_element(By.ID, "businessNo")
             sheet_code_input.clear()
             business_number_input.clear()
-            
+
             # 输入业务号码
             business_number_input.send_keys(business_number)
-            
+
             # 设置较长的时间范围（比如最近3个月）
             current_date = dt.datetime.now()
             start_date = current_date - dt.timedelta(days=90)
             end_date = current_date
-            
+
             # 设置开始时间
             accept_time_begin = driver.find_element(By.ID, "acceptTimeBegin")
             accept_time_begin.clear()
             driver.execute_script(
-                f"arguments[0].value = '{start_date.strftime('%Y-%m-%d %H:%M:%S')}';", 
+                f"arguments[0].value = '{start_date.strftime('%Y-%m-%d %H:%M:%S')}';",
                 accept_time_begin
             )
 
@@ -518,7 +526,7 @@ def process_business_number(driver, row_data: dict, file_manager: FileManager) -
             accept_time_end = driver.find_element(By.ID, "acceptTimeEnd")
             accept_time_end.clear()
             driver.execute_script(
-                f"arguments[0].value = '{end_date.strftime('%Y-%m-%d %H:%M:%S')}';", 
+                f"arguments[0].value = '{end_date.strftime('%Y-%m-%d %H:%M:%S')}';",
                 accept_time_end
             )
 
@@ -558,6 +566,7 @@ def parse_datetime(time_str: str) -> datetime:
         print(f"Error parsing datetime: {e}")
         return None
 
+
 def calculate_timeout_hours(start: Optional[datetime], end: Optional[datetime]) -> float:
     """计算两个时间点之间的小时差"""
     if not start or not end:
@@ -565,28 +574,29 @@ def calculate_timeout_hours(start: Optional[datetime], end: Optional[datetime]) 
     time_diff = end - start
     return time_diff.total_seconds() / 3600  # 转换为小时
 
+
 def handle_work_order_dialog(driver):
     """处理工单弹窗"""
     try:
         driver.switch_to.default_content()
         print("Waiting for dialog div to appear...")
-        
+
         dialog_div = WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.ID, "_DialogDiv_1fk"))
         )
-        
+
         if not dialog_div.is_displayed():
             print("Dialog div is not visible")
             return False
 
         print("Dialog div is visible")
-        
+
         # 切换到弹窗iframe
         dialog_frame = WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.ID, "_DialogFrame_1fk"))
         )
         print("Dialog frame found")
-        
+
         # 切换到iframe
         driver.switch_to.frame("_DialogFrame_1fk")
         print("Switched to dialog frame")
@@ -602,10 +612,10 @@ def handle_work_order_dialog(driver):
             print(f"归档时间: {process_times.archive_time}")
             print(f"超时环节: {process_times.timeout_step}")
             print(f"超时问题: {process_times.timeout_issue}")
-        
+
         # 切回主文档
         driver.switch_to.default_content()
-        
+
         return close_dialog(driver)
 
     except Exception as e:
@@ -629,7 +639,7 @@ def close_dialog(driver):
             }
         """)
         print("Dialog close command executed")
-        
+
         # 等待弹窗消失
         WebDriverWait(driver, 10).until_not(
             EC.presence_of_element_located((By.ID, "_DialogDiv_1fk"))
@@ -660,7 +670,7 @@ def process_detail_tabs(driver):
                 continue
 
             count = get_headquarters_order_count(driver)
-            
+
             if count == 0:
                 close_empty_tab(driver, tab_id)
             else:
@@ -749,24 +759,25 @@ def save_process_times_to_excel(process_times: ProcessDataFrame, file_manager: F
             "超时环节": [process_times.timeout_step],
             "超时问题": [process_times.timeout_issue]
         }
-        
+
         # 转换为 Polars DataFrame
         df = pl.DataFrame(data)
-        
+
         # 读取现有文件
         file_path = "WorkDocument/网络质量报表超时分析/网络质量报表-Test.xlsx"
         existing_df = file_manager.read_excel(file_path)
-        
+
         # 如果现有文件有数据，则追加新数据
         if not existing_df.is_empty():
             df = pl.concat([existing_df, df])
-        
+
         # 保存回文件
         file_manager.save_to_excel(df, "网络质量报表超时分析")
         print("数据已成功保存到Excel文件")
 
     except Exception as e:
         print(f"保存数据到Excel时出错: {e}")
+
 
 def get_process_info_10010(driver) -> ProcessDataFrame:
     """获取10010工单处理过程信息中的数据"""
@@ -781,18 +792,18 @@ def get_process_info_10010(driver) -> ProcessDataFrame:
 
         # 初始化数据结构
         process_times = ProcessDataFrame()
-        
+
         # 用于跟踪最新时间的临时变量
         latest_process_time = None  # 最新的核查处理时间
-        latest_review_time = None   # 最新的结果审核时间
+        latest_review_time = None  # 最新的结果审核时间
         latest_archive_time = None  # 最新的归档/回访时间
 
         # 获取所有页面的数据
         while True:
             # 获取当前页面的所有行
             rows = WebDriverWait(driver, 10).until(
-                EC.presence_of_all_elements_located((By.XPATH, 
-                    "//tr[@class='ant-table-row ant-table-row-level-0']"))
+                EC.presence_of_all_elements_located((By.XPATH,
+                                                     "//tr[@class='ant-table-row ant-table-row-level-0']"))
             )
 
             for row in rows:
@@ -817,26 +828,26 @@ def get_process_info_10010(driver) -> ProcessDataFrame:
                         if not process_times.start_time:  # 只记录第一次的开始时间
                             process_times.start_time = current_time
                             print(f"Found start time: {time_str}")
-                    
+
                     elif step == "审核派发" and "派送" in action:
                         if not process_times.dispatch_time:  # 只记录第一次的派发时间
                             process_times.dispatch_time = current_time
                             print(f"Found dispatch time: {time_str}")
-                    
+
                     elif step == "核查处理" and "处理完成" in action:
                         # 更新为最新的处理完成时间
                         if not latest_process_time or current_time > latest_process_time:
                             latest_process_time = current_time
                             process_times.last_process_time = current_time
                             print(f"Updated process time: {time_str}")
-                    
+
                     elif step == "结果审核" and "转回访" in action:
                         # 更新为最新的结果审核时间
                         if not latest_review_time or current_time > latest_review_time:
                             latest_review_time = current_time
                             process_times.final_review_time = current_time
                             print(f"Updated final review time: {time_str}")
-                    
+
                     elif (step == "回访" and "业务办结" in action) or step == "归档":
                         # 更新为最新的归档时间
                         if not latest_archive_time or current_time > latest_archive_time:
@@ -849,12 +860,12 @@ def get_process_info_10010(driver) -> ProcessDataFrame:
                     continue
 
             # 检查是否有下一页
-            next_button = driver.find_element(By.XPATH, 
-                "//li[contains(@class, 'ant-pagination-next')]")
-            
+            next_button = driver.find_element(By.XPATH,
+                                              "//li[contains(@class, 'ant-pagination-next')]")
+
             if 'ant-pagination-disabled' in next_button.get_attribute('class'):
                 break
-            
+
             # 点击下一页
             driver.execute_script("arguments[0].click();", next_button)
             time.sleep(1)
@@ -869,6 +880,7 @@ def get_process_info_10010(driver) -> ProcessDataFrame:
     except Exception as e:
         print(f"Error getting process info for 10010: {e}")
         return ProcessDataFrame()
+
 
 def calculate_timeout_step(process_times: ProcessDataFrame) -> dict:
     """计算超时环节和问题"""
@@ -918,30 +930,31 @@ def calculate_timeout_step(process_times: ProcessDataFrame) -> dict:
         print(f"Error calculating timeout step: {e}")
         return {'step': '', 'issue': ''}
 
+
 def activate_work_order_query_tab(driver):
     """激活工单查询标签页并关闭其他标签，然后切换到主frame"""
     try:
         # 找到工单查询标签
         work_order_tab = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.XPATH, 
-                "//td[contains(@class, 'tab_title') and @title='工单查询']"))
+            EC.presence_of_element_located((By.XPATH,
+                                            "//td[contains(@class, 'tab_title') and @title='工单查询']"))
         )
-        
+
         # 右键点击标签
         actions = ActionChains(driver)
         actions.context_click(work_order_tab).perform()
-        
+
         # 等待右键菜单出现并点击"关闭其他标签"
         close_others = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.XPATH, 
-                "//div[contains(@class, 'l-menu-item-text') and text()='关闭其他标签']"))
+            EC.element_to_be_clickable((By.XPATH,
+                                        "//div[contains(@class, 'l-menu-item-text') and text()='关闭其他标签']"))
         )
         close_others.click()
-        
+
         # 确保工单查询标签被激活
         if 'tab_item2_selected' not in work_order_tab.get_attribute('class'):
             work_order_tab.click()
-            
+
         print("工单查询标签已激活，其他标签已关闭")
 
         # 切换到主frame
@@ -950,20 +963,21 @@ def activate_work_order_query_tab(driver):
             EC.frame_to_be_available_and_switch_to_it((By.ID, "page_gg9902040500"))
         )
         print("已切换到工单查询主frame")
-        
+
         return True
 
     except Exception as e:
         print(f"激活工单查询标签时出错: {e}")
         return False
 
+
 def main():
     file_manager = FileManager(".")
     try:
         # 读取Excel文件
         file_path = "WorkDocument/网络质量报表超时分析/网络质量报表-Test.xlsx"
-        df = file_manager.read_excel(file_path,sheet_name="Sheet_0")
-        
+        df = file_manager.read_excel(file_path, sheet_name="Sheet_0")
+
         if df.is_empty():
             print("Excel文件为空或无法读取")
             return
@@ -977,16 +991,17 @@ def main():
         main_iframe = WebDriverWait(driver, 10).until(
             EC.frame_to_be_available_and_switch_to_it((By.ID, "page_gg9902040500"))
         )
-        
+
         # 逐行处理数据
         results = []
         for row in df.iter_rows(named=True):
             row_dict = dict(row)
-            print(f"\n处理记录: 工单流水号={row_dict.get('工单流水号', 'N/A')}, 业务号码={row_dict.get('业务号码', 'N/A')}")
-            
+            print(
+                f"\n处理记录: 工单流水号={row_dict.get('工单流水号', 'N/A')}, 业务号码={row_dict.get('业务号码', 'N/A')}")
+
             # 处理单个记录
             process_times = process_business_number(driver, row_dict, file_manager)
-            
+
             if process_times:
                 # 将处理时间信息添加到原始数据中
                 row_dict.update({

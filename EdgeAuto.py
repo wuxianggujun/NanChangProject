@@ -268,7 +268,7 @@ def handle_search_results(driver) -> ProcessDataFrame:
                     
                     if "10010客服热线" in channel_text:
                         print("检测到10010工单，直接获取时间信息")
-                        process_times = get_process_info(driver)
+                        process_times = get_process_info_10010(driver)
                         driver.switch_to.default_content()
                         return process_times
                     else:
@@ -448,6 +448,8 @@ def get_process_info(driver) -> ProcessDataFrame:
                 EC.presence_of_all_elements_located((By.XPATH, 
                     "//tr[@class='ant-table-row ant-table-row-level-0']"))
             )
+            
+            print(rows)
 
             for row in rows:
                 # 获取环节和处理时间
@@ -753,19 +755,134 @@ def save_process_times_to_excel(process_times: ProcessDataFrame, file_manager: F
     except Exception as e:
         print(f"保存数据到Excel时出错: {e}")
 
+def get_process_info_10010(driver) -> ProcessDataFrame:
+    """获取10010工单处理过程信息中的数据"""
+    try:
+        # 切换到处理过程信息标签
+        process_tab = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, "//div[@data-node-key='sheetprocess']"))
+        )
+        driver.execute_script("arguments[0].click();", process_tab)
+        print("Switched to process info tab")
+        time.sleep(1)
+
+        # 初始化数据结构
+        process_times = ProcessDataFrame()
+        
+        # 获取表格数据
+        rows = WebDriverWait(driver, 10).until(
+            EC.presence_of_all_elements_located((By.CSS_SELECTOR, 
+                ".ant-table-tbody tr:not(.ant-table-expanded-row)"))
+        )
+
+        # 从后向前遍历处理记录
+        for row in reversed(rows):
+            cells = row.find_elements(By.TAG_NAME, "td")
+            if len(cells) >= 4:
+                arrive_time_str = cells[0].text.strip()
+                step = cells[3].text.strip()
+                
+                try:
+                    arrive_time = datetime.strptime(arrive_time_str, '%Y-%m-%d %H:%M:%S')
+                    
+                    if step == "开始":
+                        process_times.start_time = arrive_time
+                    elif step == "区域派送":
+                        process_times.dispatch_time = arrive_time
+                    elif step == "核查处理":
+                        process_times.last_process_time = arrive_time
+                    elif step == "结果审核":
+                        process_times.final_review_time = arrive_time
+                    elif step == "归档":
+                        process_times.archive_time = arrive_time
+                        
+                except ValueError as e:
+                    print(f"Error parsing datetime: {e}")
+                    continue
+
+        # 计算各环节耗时并找出最长耗时环节
+        max_hours = 0
+        
+        if process_times.start_time and process_times.dispatch_time:
+            hours = calculate_timeout_hours(process_times.start_time, process_times.dispatch_time)
+            if hours > max_hours:
+                max_hours = hours
+                process_times.timeout_step = "区域派送"
+                process_times.timeout_issue = "区域派送环节耗时过长"
+
+        if process_times.dispatch_time and process_times.last_process_time:
+            hours = calculate_timeout_hours(process_times.dispatch_time, process_times.last_process_time)
+            if hours > max_hours:
+                max_hours = hours
+                process_times.timeout_step = "核查处理"
+                process_times.timeout_issue = "核查处理环节耗时过长"
+
+        if process_times.last_process_time and process_times.final_review_time:
+            hours = calculate_timeout_hours(process_times.last_process_time, process_times.final_review_time)
+            if hours > max_hours:
+                max_hours = hours
+                process_times.timeout_step = "结果审核"
+                process_times.timeout_issue = "结果审核环节耗时过长"
+
+        print(f"\n最长耗时环节: {process_times.timeout_step}, 耗时: {max_hours:.2f}小时")
+        return process_times
+
+    except Exception as e:
+        print(f"Error getting process info for 10010: {e}")
+        return ProcessDataFrame()
+
+def activate_work_order_query_tab(driver):
+    """激活工单查询标签页并关闭其他标签，然后切换到主frame"""
+    try:
+        # 找到工单查询标签
+        work_order_tab = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, 
+                "//td[contains(@class, 'tab_title') and @title='工单查询']"))
+        )
+        
+        # 右键点击标签
+        actions = ActionChains(driver)
+        actions.context_click(work_order_tab).perform()
+        
+        # 等待右键菜单出现并点击"关闭其他标签"
+        close_others = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, 
+                "//div[contains(@class, 'l-menu-item-text') and text()='关闭其他标签']"))
+        )
+        close_others.click()
+        
+        # 确保工单查询标签被激活
+        if 'tab_item2_selected' not in work_order_tab.get_attribute('class'):
+            work_order_tab.click()
+            
+        print("工单查询标签已激活，其他标签已关闭")
+
+        # 切换到主frame
+        driver.switch_to.default_content()  # 先切回默认内容
+        main_iframe = WebDriverWait(driver, 10).until(
+            EC.frame_to_be_available_and_switch_to_it((By.ID, "page_gg9902040500"))
+        )
+        print("已切换到工单查询主frame")
+        
+        return True
+
+    except Exception as e:
+        print(f"激活工单查询标签时出错: {e}")
+        return False
+
 def main():
     file_manager = FileManager(".")
     try:
         # 读取Excel文件
         file_path = "WorkDocument/网络质量报表超时分析/网络质量报表-Test.xlsx"
-        df = file_manager.read_excel(file_path)
+        df = file_manager.read_excel(file_path,sheet_name="Sheet_0")
         
         if df.is_empty():
             print("Excel文件为空或无法读取")
             return
 
         driver = launch_edge_with_remote_debugging(DEBUGGER_ADDRESS)
-        # input("请确保已在 Edge 浏览器中打开目标页面并登录，然后按回车继续执行��动化操作...")
+        # input("请确保已在 Edge 浏览器中打开目标页面并登录，然后按回车继续执行自动化操作...")
 
         check_work_order_query_page(driver)
 
@@ -795,119 +912,13 @@ def main():
                     "超时问题": process_times.timeout_issue
                 })
             results.append(row_dict)
-
+            # 在开始新查询前调用
+            activate_work_order_query_tab(driver)
             # 保存所有结果
         if results:
             result_df = pl.DataFrame(results)
             file_manager.save_to_excel(result_df, "网络质量报表超时分析")
             print("所有数据处理完成并保存")
-
-
-        # # 获取所有工单链接
-        # driver.switch_to.default_content()
-        # iframe = WebDriverWait(driver, 10).until(
-        #     EC.presence_of_element_located((By.ID, "page_gg9902040500"))
-        # )
-        # driver.switch_to.frame(iframe)
-        # 
-        # # 等待列表加载
-        # rows = WebDriverWait(driver, 10).until(
-        #     EC.presence_of_all_elements_located((By.XPATH, "//tbody/tr"))
-        # )
-        # 
-        # if not rows:
-        #     print("列表为空，没有数据。")
-        #     return
-        # 
-        #     # 获取所有工单链接
-        # links = WebDriverWait(driver, 10).until(
-        #     EC.presence_of_all_elements_located(
-        #         (By.XPATH, "//a[contains(@onclick, 'datagrid.openNewDetail')]")
-        #     )
-        # )
-        # 
-        # # 存储所有要处理的工单信息
-        # work_orders = []
-        # for link in links:
-        #     work_order_number = link.text.strip()
-        #     if work_order_number:
-        #         work_orders.append({
-        #             'number': work_order_number,
-        #             'onclick': link.get_attribute('onclick')
-        #         })
-        # 
-        #     print(f"Found {len(work_orders)} work orders to process")
-        # 
-        #     # 处理每个工单
-        # for index, work_order in enumerate(work_orders):
-        #     try:
-        #         print(f"\nProcessing work order {index + 1}: {work_order['number']}")
-        # 
-        #         # 切换到工单查询标签页
-        #         driver.switch_to.default_content()
-        #         query_tab = WebDriverWait(driver, 10).until(
-        #             EC.element_to_be_clickable((By.XPATH, "//td[@title='工单查询']"))
-        #         )
-        #         if 'tab_item2_selected' not in query_tab.get_attribute('class'):
-        #             query_tab.click()
-        #             time.sleep(1)
-        # 
-        #         # 切换到iframe
-        #         iframe = WebDriverWait(driver, 10).until(
-        #             EC.presence_of_element_located((By.ID, "page_gg9902040500"))
-        #         )
-        #         driver.switch_to.frame(iframe)
-        # 
-        #         # 记录当前标签页数量
-        #         driver.switch_to.default_content()
-        #         initial_tabs = len(get_new_detail_tabs(driver))
-        # 
-        #         # 切换回iframe并执行点击
-        #         driver.switch_to.frame(iframe)
-        #         print(f"Executing onclick: {work_order['onclick']}")
-        #         driver.execute_script(work_order['onclick'])
-        #         time.sleep(1)
-        # 
-        #         # 等待新标签页打开
-        #         max_attempts = 10
-        #         attempts = 0
-        #         while attempts < max_attempts:
-        #             driver.switch_to.default_content()
-        #             current_tabs = len(get_new_detail_tabs(driver))
-        #             print(f"Current tabs: {current_tabs}, Initial tabs: {initial_tabs}")
-        #             if current_tabs > initial_tabs:
-        #                 print(f"New tab opened successfully for work order {work_order['number']}")
-        #                 break
-        #             time.sleep(1)
-        #             attempts += 1
-        # 
-        #         if attempts == max_attempts:
-        #             print(f"Failed to detect new tab for work order {work_order['number']}")
-        #             continue
-        # 
-        #         # 处理新打开的工单详情
-        #         process_detail_tabs(driver)
-        #         time.sleep(2)
-        # 
-        #     except Exception as e:
-        #         print(f"Error processing work order {index + 1}: {e}")
-        #         driver.switch_to.default_content()
-        #         continue
-        # 
-        # # 获取处理时间
-        # process_times = get_process_info(driver)
-        # if process_times:
-        #     print("\n处理时间信息:")
-        #     print(f"开始时间: {process_times.start_time}")
-        #     print(f"派发时间: {process_times.dispatch_time}")
-        #     print(f"最后处理时间: {process_times.last_process_time}")
-        #     print(f"最终审核时间: {process_times.final_review_time}")
-        #     print(f"归档时间: {process_times.archive_time}")
-        #     print(f"超时环节: {process_times.timeout_step}")
-        #     print(f"超时问题: {process_times.timeout_issue}")
-        #     
-        #     # 保存数据到Excel
-        #     save_process_times_to_excel(process_times,file_manager)
 
     except Exception as e:
         print(f"发生错误: {e}")

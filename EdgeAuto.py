@@ -234,6 +234,20 @@ class ProcessDataFrame:
     timeout_issue: str = ""                       # 超时工单问题定位
 
 
+def close_current_tab(driver):
+    """关闭当前工单详情标签页"""
+    try:
+        # 查找并点击关闭按钮
+        close_button = WebDriverWait(driver, 5).until(
+            EC.element_to_be_clickable((By.XPATH, 
+                "//td[contains(@title, '新工单详情')]/following-sibling::td//div[contains(@class, 'tab_close')]"))
+        )
+        close_button.click()
+        time.sleep(1)
+        print("已关闭当前工单详情标签页")
+    except Exception as e:
+        print(f"关闭标签页时出错: {e}")
+
 def handle_search_results(driver, row_data: dict) -> ProcessDataFrame:
     """处理搜索结果并返回处理时间信息"""
     try:
@@ -310,20 +324,24 @@ def handle_search_results(driver, row_data: dict) -> ProcessDataFrame:
                                 # 从 row_data 中获取工单流水号
                                 sheet_code = str(row_data.get('工单流水号', ''))
                                 result = process_headquarters_orders(driver, sheet_code)
-                            
+                                
                             driver.switch_to.default_content()
-                            
+
                             if result:
                                 return result
-                                
+                            close_current_tab(driver)
+                            
+                            
                         except Exception as e:
                             print(f"处理iframe {iframe_id} 时出错: {str(e)}")
                             driver.switch_to.default_content()
+                            close_current_tab(driver)
                             continue
                     
             except Exception as e:
                 print(f"处理第{index+1}个工单时出错: {str(e)}")
                 driver.switch_to.default_content()
+                close_current_tab(driver)
                 continue
                 
         return None

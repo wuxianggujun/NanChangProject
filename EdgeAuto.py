@@ -226,69 +226,77 @@ def handle_search_results(driver) -> ProcessDataFrame:
         driver.switch_to.frame(iframe)
         print("已切换到工单查询主frame")
 
-        # 查找工单链接
+        # 获取所有工单链接
         links = WebDriverWait(driver, 10).until(
             EC.presence_of_all_elements_located(
                 (By.XPATH, "//a[contains(@onclick, 'datagrid.openNewDetail')]")
             )
         )
-
-        if not links:
-            print("未找到工单链接")
-            return None
-
-        # 处理第一个工单
-        work_order = links[0]
-        onclick = work_order.get_attribute('onclick')
-        if onclick:
-            print(f"点击工单链接: {onclick}")
-            driver.execute_script(onclick)
-            time.sleep(2)
-            
-            # 切换到默认内容以查找新打开的iframe
-            driver.switch_to.default_content()
-            
-            # 等待并获取新打开的iframe
-            new_iframes = WebDriverWait(driver, 10).until(
-                EC.presence_of_all_elements_located((By.XPATH, "//iframe[contains(@id, '_new')]"))
-            )
-            
-            for iframe in new_iframes:
-                try:
-                    iframe_id = iframe.get_attribute('id')
-                    print(f"尝试切换到iframe: {iframe_id}")
+        
+        print(f"找到 {len(links)} 个工单")
+        
+        for index, work_order in enumerate(links):
+            try:
+                # 获取并执行onclick事件
+                onclick = work_order.get_attribute('onclick')
+                if onclick:
+                    print(f"点击工单链接: {onclick}")
+                    driver.execute_script(onclick)
+                    time.sleep(2)
                     
-                    driver.switch_to.frame(iframe)
+                    # 切换到默认内容以查找新打开的iframe
+                    driver.switch_to.default_content()
                     
-                    # 查找受理渠道
-                    channel_xpath = "//span[contains(@class, 'ant-descriptions-item-label') and contains(text(), '受理渠道')]/following-sibling::span[contains(@class, 'ant-descriptions-item-content')]"
-                    channel_element = WebDriverWait(driver, 5).until(
-                        EC.presence_of_element_located((By.XPATH, channel_xpath))
+                    # 等待并获取新打开的iframe
+                    new_iframes = WebDriverWait(driver, 10).until(
+                        EC.presence_of_all_elements_located((By.XPATH, "//iframe[contains(@id, '_new')]"))
                     )
                     
-                    channel_text = channel_element.text.strip()
-                    print(f"找到受理渠道: {channel_text}")
+                    for iframe in new_iframes:
+                        try:
+                            iframe_id = iframe.get_attribute('id')
+                            print(f"尝试切换到iframe: {iframe_id}")
+                            
+                            driver.switch_to.frame(iframe)
+                            
+                            # 查找受理渠道
+                            channel_xpath = "//span[contains(@class, 'ant-descriptions-item-label') and contains(text(), '受理渠道')]/following-sibling::span[contains(@class, 'ant-descriptions-item-content')]"
+                            channel_element = WebDriverWait(driver, 5).until(
+                                EC.presence_of_element_located((By.XPATH, channel_xpath))
+                            )
+                            
+                            channel_text = channel_element.text.strip()
+                            print(f"找到受理渠道: {channel_text}")
+                            
+                            # 判断处理方式
+                            is_10010 = any(x in channel_text.lower() for x in ['10010', '客服热线'])
+                            
+                            if is_10010:
+                                print(f"处理10010工单，受理渠道: {channel_text}")
+                                result = get_process_info_10010(driver)
+                            else:
+                                print(f"处理10015工单，受理渠道: {channel_text}")
+                                result = handle_work_order_dialog(driver)
+                            
+                            driver.switch_to.default_content()
+                            
+                            if result:
+                                return result
+                                
+                        except Exception as e:
+                            print(f"处理iframe {iframe_id} 时出错: {str(e)}")
+                            driver.switch_to.default_content()
+                            continue
                     
-                    if "10010客服热线" in channel_text:
-                        print("检测到10010工单，获取时间信息")
-                        process_times = get_process_info_10010(driver)
-                        driver.switch_to.default_content()
-                        return process_times
-                    else:
-                        print(f"非10010工单，当前受理渠道: {channel_text}")
-                        driver.switch_to.default_content()
-                        
-                except Exception as e:
-                    print(f"处理iframe {iframe_id} 时出错: {e}")
-                    driver.switch_to.default_content()
-                    continue
-            
-            return handle_work_order_dialog(driver)
-
+            except Exception as e:
+                print(f"处理第{index+1}个工单时出错: {str(e)}")
+                driver.switch_to.default_content()
+                continue
+                
         return None
-
+        
     except Exception as e:
-        print(f"处理搜索结果时出错: {e}")
+        print(f"处理搜索结果时出错: {str(e)}")
         driver.switch_to.default_content()
         return None
 
@@ -385,7 +393,7 @@ def process_business_number(driver, row_data: dict, file_manager: FileManager) -
     try:
         # 获取支撑系统工单号、工单流水号和业务号码
         support_code = str(row_data.get('支撑系统工单号', ''))
-        sheet_code = str(row_data.get('工单流水号', ''))
+        sheet_code = str(row_data.get('工单流水��', ''))
         business_number = str(row_data.get('业务号码', ''))
 
         # 首先尝试使用工单流水号搜索
@@ -755,7 +763,7 @@ def click_work_order_link(driver, link):
         )
         driver.switch_to.frame(iframe)
 
-        # 4. 重新获取链接元素（因为可能已经过期）
+        # 4. 重新获取链接元素（因���可能已经过期）
         link_xpath = f"//a[contains(@onclick, 'datagrid.openNewDetail') and text()='{link.text}']"
         new_link = WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.XPATH, link_xpath))

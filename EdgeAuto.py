@@ -283,10 +283,25 @@ def handle_search_results(driver, row_data: dict) -> ProcessDataFrame:
         for index, work_order in enumerate(links):
             try:
                 print(f"\n处理第 {index + 1} 个工单")
-                onclick = work_order.get_attribute('onclick')
-                if onclick:
-                    print(f"点击工单链接: {onclick}")
-                    driver.execute_script(onclick)
+
+                # 每次处理新工单前，确保在正确的iframe中
+                driver.switch_to.default_content()
+                # 切换到工单查询iframe (使用id选择器)
+                query_frame = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.ID, "page_gg9902040500"))
+                )
+                driver.switch_to.frame(query_frame)
+                
+                # 点击工单链接
+                work_order = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable(
+                        (By.XPATH, f"//a[contains(@onclick, 'datagrid.openNewDetail({index})')]"))
+                )
+                onclick_value = work_order.get_attribute("onclick")
+                
+                if onclick_value:
+                    print(f"点击工单链接: {onclick_value}")
+                    driver.execute_script(onclick_value)
                     time.sleep(2)
 
                     # 切换到默认内容以查找新打开的iframe

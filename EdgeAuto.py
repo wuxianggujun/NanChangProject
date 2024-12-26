@@ -769,67 +769,141 @@ def get_process_info_10010(driver) -> ProcessDataFrame:
         # 初始化数据结构
         process_times = ProcessDataFrame()
         
-        # 获取表格数据
-        rows = WebDriverWait(driver, 10).until(
-            EC.presence_of_all_elements_located((By.CSS_SELECTOR, 
-                ".ant-table-tbody tr:not(.ant-table-expanded-row)"))
-        )
+        # 用于跟踪最新时间的临时变量
+        latest_process_time = None  # 最新的核查处理时间
+        latest_review_time = None   # 最新的结果审核时间
+        latest_archive_time = None  # 最新的归档/回访时间
 
-        # 从后向前遍历处理记录
-        for row in reversed(rows):
-            cells = row.find_elements(By.TAG_NAME, "td")
-            if len(cells) >= 4:
-                arrive_time_str = cells[0].text.strip()
-                step = cells[3].text.strip()
-                
+        # 获取所有页面的数据
+        while True:
+            # 获取当前页面的所有行
+            rows = WebDriverWait(driver, 10).until(
+                EC.presence_of_all_elements_located((By.XPATH, 
+                    "//tr[@class='ant-table-row ant-table-row-level-0']"))
+            )
+
+            for row in rows:
                 try:
-                    arrive_time = datetime.strptime(arrive_time_str, '%Y-%m-%d %H:%M:%S')
+                    # 获取环节、动作和处理时间
+                    arrive_time = row.find_element(By.XPATH, ".//td[1]").text.strip()
+                    process_time = row.find_element(By.XPATH, ".//td[2]").text.strip()
+                    step = row.find_element(By.XPATH, ".//td[4]").text.strip()
+                    action = row.find_element(By.XPATH, ".//td[6]").text.strip()
+
+                    # 使用处理时间，如果为空则使用到达时间
+                    time_str = process_time if process_time else arrive_time
+                    if not time_str:
+                        continue
+
+                    current_time = parse_datetime(time_str)
+                    if not current_time:
+                        continue
+
+                    # 根据环节和动作组合判断
+                    if step == "开始" and "提交" in action:
+                        if not process_times.start_time:  # 只记录第一次的开始时间
+                            process_times.start_time = current_time
+                            print(f"Found start time: {time_str}")
                     
-                    if step == "开始":
-                        process_times.start_time = arrive_time
-                    elif step == "区域派送":
-                        process_times.dispatch_time = arrive_time
-                    elif step == "核查处理":
-                        process_times.last_process_time = arrive_time
-                    elif step == "结果审核":
-                        process_times.final_review_time = arrive_time
-                    elif step == "归档":
-                        process_times.archive_time = arrive_time
-                        
-                except ValueError as e:
-                    print(f"Error parsing datetime: {e}")
+                    elif step == "审核派发" and "派送" in action:
+                        if not process_times.dispatch_time:  # 只记录第一次的派发时间
+                            process_times.dispatch_time = current_time
+                            print(f"Found dispatch time: {time_str}")
+                    
+                    elif step == "核查处理" and "处理完成" in action:
+                        # 更新为最新的处理完成时间
+                        if not latest_process_time or current_time > latest_process_time:
+                            latest_process_time = current_time
+                            process_times.last_process_time = current_time
+                            print(f"Updated process time: {time_str}")
+                    
+                    elif step == "结果审核" and "转回访" in action:
+                        # 更新为最新的结果审核时间
+                        if not latest_review_time or current_time > latest_review_time:
+                            latest_review_time = current_time
+                            process_times.final_review_time = current_time
+                            print(f"Updated final review time: {time_str}")
+                    
+                    elif (step == "回访" and "业务办结" in action) or step == "归档":
+                        # 更新为最新的归档时间
+                        if not latest_archive_time or current_time > latest_archive_time:
+                            latest_archive_time = current_time
+                            process_times.archive_time = current_time
+                            print(f"Updated archive time: {time_str}")
+
+                except Exception as e:
+                    print(f"Error processing row: {e}")
                     continue
 
-        # 计算各环节耗时并找出最长耗时环节
-        max_hours = 0
-        
-        if process_times.start_time and process_times.dispatch_time:
-            hours = calculate_timeout_hours(process_times.start_time, process_times.dispatch_time)
-            if hours > max_hours:
-                max_hours = hours
-                process_times.timeout_step = "区域派送"
-                process_times.timeout_issue = "区域派送环节耗时过长"
+            # 检查是否有下一页
+            next_button = driver.find_element(By.XPATH, 
+                "//li[contains(@class, 'ant-pagination-next')]")
+            
+            if 'ant-pagination-disabled' in next_button.get_attribute('class'):
+                break
+            
+            # 点击下一页
+            driver.execute_script("arguments[0].click();", next_button)
+            time.sleep(1)
 
-        if process_times.dispatch_time and process_times.last_process_time:
-            hours = calculate_timeout_hours(process_times.dispatch_time, process_times.last_process_time)
-            if hours > max_hours:
-                max_hours = hours
-                process_times.timeout_step = "核查处理"
-                process_times.timeout_issue = "核查处理环节耗时过长"
+        # 计算超时环节
+        timeout_info = calculate_timeout_step(process_times)
+        process_times.timeout_step = timeout_info['step']
+        process_times.timeout_issue = timeout_info['issue']
 
-        if process_times.last_process_time and process_times.final_review_time:
-            hours = calculate_timeout_hours(process_times.last_process_time, process_times.final_review_time)
-            if hours > max_hours:
-                max_hours = hours
-                process_times.timeout_step = "结果审核"
-                process_times.timeout_issue = "结果审核环节耗时过长"
-
-        print(f"\n最长耗时环节: {process_times.timeout_step}, 耗时: {max_hours:.2f}小时")
         return process_times
 
     except Exception as e:
         print(f"Error getting process info for 10010: {e}")
         return ProcessDataFrame()
+
+def calculate_timeout_step(process_times: ProcessDataFrame) -> dict:
+    """计算超时环节和问题"""
+    try:
+        max_hours = 0
+        timeout_info = {
+            'step': '',
+            'issue': ''
+        }
+
+        # 审核派发环节
+        if process_times.start_time and process_times.dispatch_time:
+            hours = calculate_timeout_hours(process_times.start_time, process_times.dispatch_time)
+            if hours > max_hours:
+                max_hours = hours
+                timeout_info['step'] = "审核派发"
+                timeout_info['issue'] = "审核派发环节耗时过长"
+
+        # 核查处理环节
+        if process_times.dispatch_time and process_times.last_process_time:
+            hours = calculate_timeout_hours(process_times.dispatch_time, process_times.last_process_time)
+            if hours > max_hours:
+                max_hours = hours
+                timeout_info['step'] = "核查处理"
+                timeout_info['issue'] = "核查处理环节耗时过长"
+
+        # 结果审核环节
+        if process_times.last_process_time and process_times.final_review_time:
+            hours = calculate_timeout_hours(process_times.last_process_time, process_times.final_review_time)
+            if hours > max_hours:
+                max_hours = hours
+                timeout_info['step'] = "结果审核"
+                timeout_info['issue'] = "结果审核环节耗时过长"
+
+        # 回访环节
+        if process_times.final_review_time and process_times.archive_time:
+            hours = calculate_timeout_hours(process_times.final_review_time, process_times.archive_time)
+            if hours > max_hours:
+                max_hours = hours
+                timeout_info['step'] = "回访工作"
+                timeout_info['issue'] = "回访工作环节耗时过长"
+
+        print(f"最长耗时环节: {timeout_info['step']}, 耗时: {max_hours:.2f}小时")
+        return timeout_info
+
+    except Exception as e:
+        print(f"Error calculating timeout step: {e}")
+        return {'step': '', 'issue': ''}
 
 def activate_work_order_query_tab(driver):
     """激活工单查询标签页并关闭其他标签，然后切换到主frame"""

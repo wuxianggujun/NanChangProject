@@ -26,6 +26,18 @@ def launch_edge_with_remote_debugging(debugger_address=DEBUGGER_ADDRESS):
     return driver
 
 
+@dataclass
+class ProcessDataFrame:
+    """工单处理时间数据结构"""
+    start_time: Optional[datetime] = None  # 开始（主办）时间
+    dispatch_time: Optional[datetime] = None  # 审核派发（主办）时间
+    last_process_time: Optional[datetime] = None  # 最后一次核查处理（主办）时间
+    final_review_time: Optional[datetime] = None  # 结果审核（主办）时间
+    archive_time: Optional[datetime] = None  # 归档（主办）时间
+    timeout_step: str = ""  # 超时环节
+    timeout_issue: str = ""  # 超时工单问题定位
+
+
 def check_work_order_query_page(driver):
     try:
         # 检查"工单查询"标签页是否处于激活状态
@@ -144,7 +156,7 @@ def close_empty_tab(driver, tab_id):
         return False
 
 
-def process_headquarters_orders(driver, target_sheet_code: str) -> bool:
+def process_headquarters_orders(driver, target_sheet_code: str) -> bool | ProcessDataFrame:
     """处理总部工单，并与目标工单流水号进行对比"""
     try:
         # 点击总部工单信息标签
@@ -181,11 +193,38 @@ def process_headquarters_orders(driver, target_sheet_code: str) -> bool:
                 if current_number == target_sheet_code:
                     print(f"找到匹配的工单流水号: {current_number}")
                     # 点击工单链接
-                    driver.execute_script("arguments[0].click();", work_order)
-                    print("已点击匹配的工单链接")
+                    # driver.execute_script("arguments[0].click();", work_order)
+                    # print("已点击匹配的工单链接")
 
+                    # 先切换到新工单详情iframe
+                    driver.switch_to.default_content()
+                    new_iframe = WebDriverWait(driver, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "iframe[id$='_new']"))
+                    )
+                    iframe_id = new_iframe.get_attribute('id')
+                    print(f"切换到工单详情iframe: {iframe_id}")
+                    driver.switch_to.frame(new_iframe)
+
+                    # 点击处理过程信息标签
+                    process_tab = WebDriverWait(driver, 10).until(
+                        EC.element_to_be_clickable((By.XPATH, "//div[@role='tab']//span[contains(text(), '处理过程信息')]"))
+                    )
+                    process_tab.click()
+                    time.sleep(1)
+                    # 获取处理时间
+                    process_times = get_process_info_10010(driver)
+                    if process_times:
+                        print("\n处理时间信息:")
+                        print(f"开始时间: {process_times.start_time}")
+                        print(f"派发时间: {process_times.dispatch_time}")
+                        print(f"最后处理时间: {process_times.last_process_time}")
+                        print(f"最终审核时间: {process_times.final_review_time}")
+                        print(f"归档时间: {process_times.archive_time}")
+                        print(f"超时环节: {process_times.timeout_step}")
+                        print(f"超时问题: {process_times.timeout_issue}")
+                        
                     # 切回主文档并处理弹窗
-                    return handle_work_order_dialog(driver)
+                    return process_times
                 else:
                     print(f"工单号不匹配，继续检查下一个")
                     continue
@@ -217,19 +256,6 @@ def process_work_order(driver, work_order_link):
     except Exception as e:
         print(f"Error processing work order: {e}")
         return False
-
-
-@dataclass
-class ProcessDataFrame:
-    """工单处理时间数据结构"""
-    start_time: Optional[datetime] = None  # 开始（主办）时间
-    dispatch_time: Optional[datetime] = None  # 审核派发（主办）时间
-    last_process_time: Optional[datetime] = None  # 最后一次核查处理（主办）时间
-    final_review_time: Optional[datetime] = None  # 结果审核（主办）时间
-    archive_time: Optional[datetime] = None  # 归档（主办）时间
-    timeout_step: str = ""  # 超时环节
-    timeout_issue: str = ""  # 超时工单问题定位
-
 
 def close_current_tab(driver):
     """关闭当前工单详情标签页"""

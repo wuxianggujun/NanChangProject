@@ -9,7 +9,7 @@ from tool.decorators.ErrorHandler import error_handler
 @error_handler
 def process_complaints(df:pl.DataFrame)->pl.DataFrame:
     today_end = dt.datetime.now().replace(hour=17,minute=0,second=0,microsecond=0)
-    yesterday_start = (today_end - dt.timedelta(days=1)).replace(hour=17,minute=0,second=0,microsecond=0)
+    yesterday_start = (today_end - dt.timedelta(days=1)).replace(hour=16,minute=0,second=0,microsecond=0)
 
     print(f"处理{yesterday_start}到{today_end}工单时间到")
     # 清理数据：删除全部列为空的行
@@ -92,7 +92,7 @@ if __name__ == "__main__":
     file_manager = FileManager("WorkDocument\\日常日报")
 
     source_file = file_manager.get_latest_file("source")
-    df = file_manager.read_excel(source_file)
+    df = file_manager.read_excel(file_path= source_file)
     result_df,stats_df = process_complaints(df)
     report_text = generate_report_text(stats_df)
 

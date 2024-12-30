@@ -251,7 +251,7 @@ if __name__ == '__main__':
 
     # 读取Excel文件
     try:
-        df = file_manager.read_excel(source_file)
+        df = file_manager.read_excel(file_path=source_file)
     except Exception as e:
         logging.error(f"无法读取Excel文件: {e}")
         exit(1)
@@ -263,8 +263,6 @@ if __name__ == '__main__':
                                原始数据=processed_df, 重复投诉结果=result_df,
                                重复投诉文本=text_df, 重复投诉统计=stats_df)
 
-    # 如果需要获取输出路径
-    print(f"输出文件路径: {file_manager.output_path}")
 
     end_time = dt.datetime.now()
     runtime = end_time - start_time

@@ -3,6 +3,12 @@ from tool.file import ExcelManager  # 假设你的 ExcelManager 类在 excel_man
 import time
 from datetime import timedelta
 import os
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Side, Font, PatternFill
+from openpyxl.utils import get_column_letter
+from openpyxl.utils.cell import range_boundaries
+from openpyxl.cell import MergedCell
+
 
 def read_mr_data(file_manager: ExcelManager, filename: str) -> pl.DataFrame:
     """读取 MR 数据，处理数据类型问题"""
@@ -16,8 +22,9 @@ def read_mr_data(file_manager: ExcelManager, filename: str) -> pl.DataFrame:
         },
     )
 
+
 def categorize_city_by_station_id_unicom(
-    df: pl.DataFrame, station_id_column: str = "基站号"
+        df: pl.DataFrame, station_id_column: str = "基站号"
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """联通基站号范围判断"""
     if station_id_column not in df.columns:
@@ -114,8 +121,9 @@ def categorize_city_by_station_id_unicom(
     rsrp_stats = aggregate_rsrp_by_city(df, "联通自建")
     return df, rsrp_stats
 
+
 def categorize_city_by_station_id_telecom(
-    df: pl.DataFrame, station_id_column: str = "基站号"
+        df: pl.DataFrame, station_id_column: str = "基站号"
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """电信基站号范围判断"""
     if station_id_column not in df.columns:
@@ -238,6 +246,7 @@ def categorize_city_by_station_id_telecom(
     rsrp_stats = aggregate_rsrp_by_city(df, "电信自建")
     return df, rsrp_stats
 
+
 def aggregate_rsrp_by_city(df: pl.DataFrame, operator_suffix: str) -> pl.DataFrame:
     """按地市统计 MRO-RSRP 数据"""
     stats = (
@@ -259,42 +268,33 @@ def aggregate_rsrp_by_city(df: pl.DataFrame, operator_suffix: str) -> pl.DataFra
         ]
     )
 
-def create_weekly_4g_stats(
-    rsrp_stats_unicom: pl.DataFrame, rsrp_stats_telecom: pl.DataFrame
+def create_weekly_4g_stats_for_excel(
+        rsrp_stats_unicom: pl.DataFrame, rsrp_stats_telecom: pl.DataFrame
 ) -> pl.DataFrame:
     """
-    创建4G周指标表，计算CQL指标和优良率
+    创建4G周指标表，用于生成Excel报表
     """
     city_order = [
-        "抚州",
-        "赣州",
-        "吉安",
-        "景德镇",
-        "九江",
-        "南昌",
-        "萍乡",
-        "上饶",
-        "新余",
-        "宜春",
-        "鹰潭",
-        "全省",
+        "抚州", "赣州", "吉安", "景德镇", "九江",
+        "南昌", "萍乡", "上饶", "新余", "宜春",
+        "鹰潭", "全省"
     ]
 
     # 预先计算各运营商的指标，并确保数据类型一致
     rsrp_stats_unicom = rsrp_stats_unicom.rename({"地市": "城市名称"}).with_columns(
         (
-            pl.col("MRO-RSRP≥-112采样点数(联通自建)").cast(pl.Float64)
-            * 100.0
-            / pl.col("MRO-RSRP总采样点数(联通自建)").cast(pl.Float64)
-        ).alias("联通优良率")
+                pl.col("MRO-RSRP≥-112采样点数(联通自建)").cast(pl.Float64)
+                * 100.0
+                / pl.col("MRO-RSRP总采样点数(联通自建)").cast(pl.Float64)
+        ).alias("RSRP≥-112采样点占比(联通自建)")
     )
 
     rsrp_stats_telecom = rsrp_stats_telecom.rename({"地市": "城市名称"}).with_columns(
         (
-            pl.col("MRO-RSRP≥-112采样点数(电信自建)").cast(pl.Float64)
-            * 100.0
-            / pl.col("MRO-RSRP总采样点数(电信自建)").cast(pl.Float64)
-        ).alias("电信优良率")
+                pl.col("MRO-RSRP≥-112采样点数(电信自建)").cast(pl.Float64)
+                * 100.0
+                / pl.col("MRO-RSRP总采样点数(电信自建)").cast(pl.Float64)
+        ).alias("RSRP≥-112采样点占比(电信共入)")
     )
 
     # 合并联通和电信的统计数据
@@ -309,10 +309,10 @@ def create_weekly_4g_stats(
         "城市名称",
         "MRO-RSRP≥-112采样点数(联通自建)",
         "MRO-RSRP总采样点数(联通自建)",
-        "联通优良率",
+        "RSRP≥-112采样点占比(联通自建)",
         "MRO-RSRP≥-112采样点数(电信自建)",
         "MRO-RSRP总采样点数(电信自建)",
-        "电信优良率"
+        "RSRP≥-112采样点占比(电信共入)",
     ])
 
     # 计算全省的汇总数据
@@ -327,14 +327,14 @@ def create_weekly_4g_stats(
             "城市名称": ["全省"],
             "MRO-RSRP≥-112采样点数(联通自建)": [total_unicom],
             "MRO-RSRP总采样点数(联通自建)": [total_unicom_samples],
-            "联通优良率": [
+            "RSRP≥-112采样点占比(联通自建)": [
                 round(total_unicom * 100.0 / total_unicom_samples, 2)
                 if total_unicom_samples > 0
                 else 0
             ],
             "MRO-RSRP≥-112采样点数(电信自建)": [total_telecom],
             "MRO-RSRP总采样点数(电信自建)": [total_telecom_samples],
-            "电信优良率": [
+            "RSRP≥-112采样点占比(电信共入)": [
                 round(total_telecom * 100.0 / total_telecom_samples, 2)
                 if total_telecom_samples > 0
                 else 0
@@ -344,26 +344,6 @@ def create_weekly_4g_stats(
 
     # 合并地市数据和全省数据
     final_stats = pl.concat([merged_stats, province_stats])
-
-    # 计算CQL指标和优良率, 并处理除零错误
-    final_stats = final_stats.with_columns(
-        [
-            # CQL总数 (使用联通数据)
-            pl.col("MRO-RSRP总采样点数(联通自建)").cast(pl.Int64).alias("CQL总数"),
-            # CQL优良率 (使用联通数据)
-            (
-                pl.when(pl.col("MRO-RSRP总采样点数(联通自建)") > 0)
-                .then(pl.col("联通优良率").round(2))
-                .otherwise(0.0)  # 当总采样点数为0时，优良率设为0
-            ).alias("CQL优良率"),
-            # 优良率 (使用联通数据)
-            (
-                pl.when(pl.col("MRO-RSRP总采样点数(联通自建)") > 0)
-                .then(pl.col("联通优良率").round(2))
-                .otherwise(0.0)  # 当总采样点数为0时，优良率设为0
-            ).alias("优良率"),
-        ]
-    )
 
     # 使用 when-then 结构创建排序键
     sort_expr = pl.when(pl.col("城市名称") == "抚州").then(0)
@@ -375,28 +355,58 @@ def create_weekly_4g_stats(
     final_stats = (
         final_stats.with_columns(sort_expr.alias("__sort_key"))
         .sort("__sort_key")
-        .select(["城市名称", "CQL总数", "CQL优良率", "优良率"])
+        .drop("__sort_key")
     )
 
+    # 添加空列以匹配目标Excel格式
+    final_stats = final_stats.with_columns([
+        pl.lit(None).alias("MRO-RSRP≥-112采样点数"),
+        pl.lit(None).alias("MRO-RSRP总采样点数"),
+        pl.lit(None).alias("MRO-RSRP≥-112采样点占比"),
+        pl.lit(None).alias("CQI>=7数量"),
+        pl.lit(None).alias("CQI总数"),
+        pl.lit(None).alias("CQI优良率"),
+    ])
+
+    # 调整列的顺序以匹配目标Excel格式
+    final_stats = final_stats.select([
+        "城市名称",
+        "MRO-RSRP≥-112采样点数(联通自建)",
+        "MRO-RSRP总采样点数(联通自建)",
+        "RSRP≥-112采样点占比(联通自建)",
+        "MRO-RSRP≥-112采样点数(电信自建)",
+        "MRO-RSRP总采样点数(电信自建)",
+        "RSRP≥-112采样点占比(电信共入)",
+        "MRO-RSRP≥-112采样点数",
+        "MRO-RSRP总采样点数",
+        "MRO-RSRP≥-112采样点占比",
+        "CQI>=7数量",
+        "CQI总数",
+        "CQI优良率",
+    ])
+
     return final_stats
+
 
 def save_results(file_manager: ExcelManager, results: dict, base_name: str):
     """保存结果到不同格式"""
     # 保存主要统计结果为Excel
     file_manager.save_multiple_sheets(
         filename=f"{base_name}_统计结果",
+        # formatter=ExcelFormatter,
         _4G周指标=results["weekly_4g_stats"],
         联通指标统计=results["rsrp_stats_unicom"],
         电信指标统计=results["rsrp_stats_telecom"],
     )
 
-    # 保存大量原始数据为parquet格式
-    results["df_unicom"].write_parquet(
-        os.path.join(file_manager.base_dir, f"{base_name}_联通数据.parquet")
-    )
-    results["df_telecom"].write_parquet(
-        os.path.join(file_manager.base_dir, f"{base_name}_电信数据.parquet")
-    )
+    # # 保存大量原始数据为parquet格式
+    # results["df_unicom"].write_parquet(
+    #     os.path.join(file_manager.base_dir, f"{base_name}_联通数据.parquet")
+    # )
+    # results["df_telecom"].write_parquet(
+    #     os.path.join(file_manager.base_dir, f"{base_name}_电信数据.parquet")
+    # )
+
 
 if __name__ == "__main__":
     start_time = time.time()
@@ -415,7 +425,7 @@ if __name__ == "__main__":
         df_telecom, rsrp_stats_telecom = categorize_city_by_station_id_telecom(df_telecom)
 
         print("正在生成4G周指标...")
-        weekly_4g_stats = create_weekly_4g_stats(rsrp_stats_unicom, rsrp_stats_telecom)
+        weekly_4g_stats = create_weekly_4g_stats_for_excel(rsrp_stats_unicom, rsrp_stats_telecom)
 
         # 选择需要的列
         df_unicom_save = df_unicom.select(

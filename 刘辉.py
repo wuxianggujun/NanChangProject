@@ -384,7 +384,6 @@ def create_weekly_4g_stats_for_excel(
         "CQI总数",
         "CQI优良率",
     ])
-
     return final_stats
 
 

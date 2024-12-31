@@ -9,7 +9,6 @@ from openpyxl.utils import get_column_letter
 from openpyxl.utils.cell import range_boundaries
 from openpyxl.cell import MergedCell
 
-
 def read_mr_data(file_manager: ExcelManager, filename: str) -> pl.DataFrame:
     """读取 MR 数据，处理数据类型问题"""
     return file_manager.read_csv(
@@ -22,230 +21,38 @@ def read_mr_data(file_manager: ExcelManager, filename: str) -> pl.DataFrame:
         },
     )
 
-
-def categorize_city_by_station_id_unicom(
-        df: pl.DataFrame, station_id_column: str = "基站号"
+def categorize_city_by_station_id(
+    df: pl.DataFrame,
+    station_id_ranges: dict,
+    operator_suffix: str,
+    station_id_column: str = "基站号",
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """联通基站号范围判断"""
+    """根据基站号范围判断地市"""
     if station_id_column not in df.columns:
         raise ValueError(f"数据中缺少必要的列: {station_id_column}")
 
-    df = df.with_columns(
-        pl.when(
-            pl.col(station_id_column).is_between(565248, 567295, closed="both")
-            | pl.col(station_id_column).is_between(844928, 845183, closed="both")
-            | pl.col(station_id_column).is_between(840832, 841087, closed="both")
-            | pl.col(station_id_column).is_between(983040, 983551, closed="both")
-            | pl.col(station_id_column).is_between(985344, 985695, closed="both")
-        )
-        .then(pl.lit("抚州"))
-        .when(
-            pl.col(station_id_column).is_between(552960, 556287, closed="both")
-            | pl.col(station_id_column).is_between(843776, 844159, closed="both")
-            | pl.col(station_id_column).is_between(839680, 840063, closed="both")
-            | pl.col(station_id_column).is_between(556288, 556587, closed="both")
-            | pl.col(station_id_column).is_between(985856, 986367, closed="both")
-        )
-        .then(pl.lit("南昌"))
-        .when(
-            pl.col(station_id_column).is_between(557056, 559871, closed="both")
-            | pl.col(station_id_column).is_between(844160, 844543, closed="both")
-            | pl.col(station_id_column).is_between(840064, 840447, closed="both")
-        )
-        .then(pl.lit("九江"))
-        .when(
-            pl.col(station_id_column).is_between(569344, 572159, closed="both")
-            | pl.col(station_id_column).is_between(845184, 845567, closed="both")
-            | pl.col(station_id_column).is_between(841088, 841471, closed="both")
-        )
-        .then(pl.lit("宜春"))
-        .when(
-            pl.col(station_id_column).is_between(567296, 569343, closed="both")
-            | pl.col(station_id_column).is_between(845568, 845951, closed="both")
-            | pl.col(station_id_column).is_between(841472, 841855, closed="both")
-            | pl.col(station_id_column).is_between(984576, 985087, closed="both")
-        )
-        .then(pl.lit("吉安"))
-        .when(
-            pl.col(station_id_column).is_between(573440, 576511, closed="both")
-            | pl.col(station_id_column).is_between(845952, 846463, closed="both")
-            | pl.col(station_id_column).is_between(841856, 842367, closed="both")
-            | pl.col(station_id_column).is_between(556588, 557055, closed="both")
-            | pl.col(station_id_column).is_between(983552, 984575, closed="both")
-        )
-        .then(pl.lit("赣州"))
-        .when(
-            pl.col(station_id_column).is_between(559872, 561151, closed="both")
-            | pl.col(station_id_column).is_between(846464, 846591, closed="both")
-            | pl.col(station_id_column).is_between(842368, 842495, closed="both")
-        )
-        .then(pl.lit("景德镇"))
-        .when(
-            pl.col(station_id_column).is_between(563968, 565247, closed="both")
-            | pl.col(station_id_column).is_between(846592, 846719, closed="both")
-            | pl.col(station_id_column).is_between(842496, 842623, closed="both")
-        )
-        .then(pl.lit("萍乡"))
-        .when(
-            pl.col(station_id_column).is_between(576512, 577535, closed="both")
-            | pl.col(station_id_column).is_between(846720, 846847, closed="both")
-            | pl.col(station_id_column).is_between(842624, 842751, closed="both")
-        )
-        .then(pl.lit("新余"))
-        .when(
-            pl.col(station_id_column).is_between(572160, 573439, closed="both")
-            | pl.col(station_id_column).is_between(846848, 846975, closed="both")
-            | pl.col(station_id_column).is_between(842752, 842879, closed="both")
-        )
-        .then(pl.lit("鹰潭"))
-        .when(
-            pl.col(station_id_column).is_between(561152, 563967, closed="both")
-            | pl.col(station_id_column).is_between(844544, 844927, closed="both")
-            | pl.col(station_id_column).is_between(840448, 840831, closed="both")
-            | pl.col(station_id_column).is_between(985088, 985343, closed="both")
-        )
-        .then(pl.lit("上饶"))
-        .when(
-            pl.col(station_id_column).is_between(846976, 847871, closed="both")
-            | pl.col(station_id_column).is_between(842880, 843775, closed="both")
-        )
-        .then(pl.lit("共享预留"))
-        .when(
-            pl.col(station_id_column).is_between(986368, 987135, closed="both")
-        )
-        .then(pl.lit("预留"))
-        .otherwise(pl.lit(None))
-        .alias("地市")
-    )
+    # 使用表达式链构建条件
+    when_expr = None
+    for city, ranges in station_id_ranges.items():
+        condition = None
+        for start, end in ranges:
+            if condition is None:
+                condition = pl.col(station_id_column).is_between(start, end, closed="both")
+            else:
+                condition = condition | pl.col(station_id_column).is_between(
+                    start, end, closed="both"
+                )
 
-    rsrp_stats = aggregate_rsrp_by_city(df, "联通自建")
+        if when_expr is None:
+            when_expr = pl.when(condition).then(pl.lit(city))
+        else:
+            when_expr = when_expr.when(condition).then(pl.lit(city))
+
+    # 添加地市列
+    df = df.with_columns(when_expr.otherwise(pl.lit(None)).alias("地市"))
+
+    rsrp_stats = aggregate_rsrp_by_city(df, operator_suffix)
     return df, rsrp_stats
-
-
-def categorize_city_by_station_id_telecom(
-        df: pl.DataFrame, station_id_column: str = "基站号"
-) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """电信基站号范围判断"""
-    if station_id_column not in df.columns:
-        raise ValueError(f"数据中缺少必要的列: {station_id_column}")
-
-    df = df.with_columns(
-        pl.when(
-            pl.col(station_id_column).is_between(450560, 454655, closed="both")
-            | pl.col(station_id_column).is_between(473088, 473599, closed="both")
-            | pl.col(station_id_column).is_between(476160, 476927, closed="both")
-            | pl.col(station_id_column).is_between(477440, 477950, closed="both")
-            | pl.col(station_id_column).is_between(823296, 825855, closed="both")
-            | pl.col(station_id_column).is_between(839680, 840063, closed="both")
-            | pl.col(station_id_column).is_between(843776, 844159, closed="both")
-            | pl.col(station_id_column).is_between(478464, 478591, closed="both")
-        )
-        .then(pl.lit("南昌"))
-        .when(
-            pl.col(station_id_column).is_between(454656, 456703, closed="both")
-            | pl.col(station_id_column).is_between(825856, 828415, closed="both")
-            | pl.col(station_id_column).is_between(840064, 840447, closed="both")
-            | pl.col(station_id_column).is_between(844160, 844543, closed="both")
-            | pl.col(station_id_column).is_between(478592, 478671, closed="both")
-        )
-        .then(pl.lit("九江"))
-        .when(
-            pl.col(station_id_column).is_between(456704, 458751, closed="both")
-            | pl.col(station_id_column).is_between(473600, 473983, closed="both")
-            | pl.col(station_id_column).is_between(828416, 830975, closed="both")
-            | pl.col(station_id_column).is_between(840448, 840831, closed="both")
-            | pl.col(station_id_column).is_between(844544, 844927, closed="both")
-            | pl.col(station_id_column).is_between(478672, 478751, closed="both")
-        )
-        .then(pl.lit("上饶"))
-        .when(
-            pl.col(station_id_column).is_between(458752, 460799, closed="both")
-            | pl.col(station_id_column).is_between(473984, 474367, closed="both")
-            | pl.col(station_id_column).is_between(830976, 833535, closed="both")
-            | pl.col(station_id_column).is_between(840832, 841087, closed="both")
-            | pl.col(station_id_column).is_between(844928, 845183, closed="both")
-            | pl.col(station_id_column).is_between(478752, 478831, closed="both")
-        )
-        .then(pl.lit("抚州"))
-        .when(
-            pl.col(station_id_column).is_between(460800, 462847, closed="both")
-            | pl.col(station_id_column).is_between(474368, 474751, closed="both")
-            | pl.col(station_id_column).is_between(833536, 836095, closed="both")
-            | pl.col(station_id_column).is_between(841088, 841471, closed="both")
-            | pl.col(station_id_column).is_between(845184, 845567, closed="both")
-            | pl.col(station_id_column).is_between(478832, 478911, closed="both")
-        )
-        .then(pl.lit("宜春"))
-        .when(
-            pl.col(station_id_column).is_between(462848, 464895, closed="both")
-            | pl.col(station_id_column).is_between(474752, 475135, closed="both")
-            | pl.col(station_id_column).is_between(836096, 838655, closed="both")
-            | pl.col(station_id_column).is_between(841472, 841855, closed="both")
-            | pl.col(station_id_column).is_between(845568, 845951, closed="both")
-            | pl.col(station_id_column).is_between(478912, 478991, closed="both")
-        )
-        .then(pl.lit("吉安"))
-        .when(
-            pl.col(station_id_column).is_between(464896, 466943, closed="both")
-            | pl.col(station_id_column).is_between(475136, 475519, closed="both")
-            | pl.col(station_id_column).is_between(838656, 841215, closed="both")
-            | pl.col(station_id_column).is_between(841856, 842367, closed="both")
-            | pl.col(station_id_column).is_between(845952, 846463, closed="both")
-            | pl.col(station_id_column).is_between(478992, 479071, closed="both")
-        )
-        .then(pl.lit("赣州"))
-        .when(
-            pl.col(station_id_column).is_between(466944, 468991, closed="both")
-            | pl.col(station_id_column).is_between(475520, 475903, closed="both")
-            | pl.col(station_id_column).is_between(841216, 841471, closed="both")
-            | pl.col(station_id_column).is_between(842368, 842495, closed="both")
-            | pl.col(station_id_column).is_between(846464, 846591, closed="both")
-            | pl.col(station_id_column).is_between(479072, 479151, closed="both")
-        )
-        .then(pl.lit("景德镇"))
-        .when(
-            pl.col(station_id_column).is_between(468992, 471039, closed="both")
-            | pl.col(station_id_column).is_between(475904, 476287, closed="both")
-            | pl.col(station_id_column).is_between(841472, 841855, closed="both")
-            | pl.col(station_id_column).is_between(842496, 842623, closed="both")
-            | pl.col(station_id_column).is_between(846592, 846719, closed="both")
-            | pl.col(station_id_column).is_between(479152, 479231, closed="both")
-        )
-        .then(pl.lit("萍乡"))
-        .when(
-            pl.col(station_id_column).is_between(471040, 473087, closed="both")
-            | pl.col(station_id_column).is_between(476288, 476927, closed="both")
-            | pl.col(station_id_column).is_between(841856, 842367, closed="both")
-            | pl.col(station_id_column).is_between(842624, 842751, closed="both")
-            | pl.col(station_id_column).is_between(846720, 846847, closed="both")
-            | pl.col(station_id_column).is_between(479232, 479311, closed="both")
-        )
-        .then(pl.lit("新余"))
-        .when(
-            pl.col(station_id_column).is_between(473088, 475135, closed="both")
-            | pl.col(station_id_column).is_between(476928, 477439, closed="both")
-            | pl.col(station_id_column).is_between(842368, 842879, closed="both")
-            | pl.col(station_id_column).is_between(842752, 842879, closed="both")
-            | pl.col(station_id_column).is_between(846848, 846975, closed="both")
-            | pl.col(station_id_column).is_between(479312, 479391, closed="both")
-        )
-        .then(pl.lit("鹰潭"))
-        .when(
-            pl.col(station_id_column).is_between(475136, 477439, closed="both")
-            | pl.col(station_id_column).is_between(842880, 843775, closed="both")
-        )
-        .then(pl.lit("共享预留"))
-        .when(
-            pl.col(station_id_column).is_between(477440, 478463, closed="both")
-        )
-        .then(pl.lit("预留"))
-        .otherwise(pl.lit(None))
-        .alias("地市")
-    )
-
-    rsrp_stats = aggregate_rsrp_by_city(df, "电信自建")
-    return df, rsrp_stats
-
 
 def aggregate_rsrp_by_city(df: pl.DataFrame, operator_suffix: str) -> pl.DataFrame:
     """按地市统计 MRO-RSRP 数据"""
@@ -253,8 +60,14 @@ def aggregate_rsrp_by_city(df: pl.DataFrame, operator_suffix: str) -> pl.DataFra
         df.group_by("地市")
         .agg(
             [
-                pl.col("MRO-RSRP≥-112采样点数").cast(pl.Int64).sum().alias(f"MRO-RSRP≥-112采样点数({operator_suffix})"),
-                pl.col("MRO-RSRP总采样点数").cast(pl.Int64).sum().alias(f"MRO-RSRP总采样点数({operator_suffix})"),
+                pl.col("MRO-RSRP≥-112采样点数")
+                .cast(pl.Int64)
+                .sum()
+                .alias(f"MRO-RSRP≥-112采样点数({operator_suffix})"),
+                pl.col("MRO-RSRP总采样点数")
+                .cast(pl.Int64)
+                .sum()
+                .alias(f"MRO-RSRP总采样点数({operator_suffix})"),
             ]
         )
         .filter(pl.col("地市").is_not_null())
@@ -269,31 +82,40 @@ def aggregate_rsrp_by_city(df: pl.DataFrame, operator_suffix: str) -> pl.DataFra
     )
 
 def create_weekly_4g_stats_for_excel(
-        rsrp_stats_unicom: pl.DataFrame, rsrp_stats_telecom: pl.DataFrame
+    rsrp_stats_unicom: pl.DataFrame, rsrp_stats_telecom: pl.DataFrame
 ) -> pl.DataFrame:
     """
     创建4G周指标表，用于生成Excel报表
     """
     city_order = [
-        "抚州", "赣州", "吉安", "景德镇", "九江",
-        "南昌", "萍乡", "上饶", "新余", "宜春",
-        "鹰潭", "全省"
+        "抚州",
+        "赣州",
+        "吉安",
+        "景德镇",
+        "九江",
+        "南昌",
+        "萍乡",
+        "上饶",
+        "新余",
+        "宜春",
+        "鹰潭",
+        "全省",
     ]
 
     # 预先计算各运营商的指标，并确保数据类型一致
     rsrp_stats_unicom = rsrp_stats_unicom.rename({"地市": "城市名称"}).with_columns(
         (
-                pl.col("MRO-RSRP≥-112采样点数(联通自建)").cast(pl.Float64)
-                * 100.0
-                / pl.col("MRO-RSRP总采样点数(联通自建)").cast(pl.Float64)
+            pl.col("MRO-RSRP≥-112采样点数(联通自建)").cast(pl.Float64)
+            * 100.0
+            / pl.col("MRO-RSRP总采样点数(联通自建)").cast(pl.Float64)
         ).alias("RSRP≥-112采样点占比(联通自建)")
     )
 
     rsrp_stats_telecom = rsrp_stats_telecom.rename({"地市": "城市名称"}).with_columns(
         (
-                pl.col("MRO-RSRP≥-112采样点数(电信自建)").cast(pl.Float64)
-                * 100.0
-                / pl.col("MRO-RSRP总采样点数(电信自建)").cast(pl.Float64)
+            pl.col("MRO-RSRP≥-112采样点数(电信自建)").cast(pl.Float64)
+            * 100.0
+            / pl.col("MRO-RSRP总采样点数(电信自建)").cast(pl.Float64)
         ).alias("RSRP≥-112采样点占比(电信共入)")
     )
 
@@ -305,15 +127,17 @@ def create_weekly_4g_stats_for_excel(
     )
 
     # 确保merged_stats包含所有必要的列
-    merged_stats = merged_stats.select([
-        "城市名称",
-        "MRO-RSRP≥-112采样点数(联通自建)",
-        "MRO-RSRP总采样点数(联通自建)",
-        "RSRP≥-112采样点占比(联通自建)",
-        "MRO-RSRP≥-112采样点数(电信自建)",
-        "MRO-RSRP总采样点数(电信自建)",
-        "RSRP≥-112采样点占比(电信共入)",
-    ])
+    merged_stats = merged_stats.select(
+        [
+            "城市名称",
+            "MRO-RSRP≥-112采样点数(联通自建)",
+            "MRO-RSRP总采样点数(联通自建)",
+            "RSRP≥-112采样点占比(联通自建)",
+            "MRO-RSRP≥-112采样点数(电信自建)",
+            "MRO-RSRP总采样点数(电信自建)",
+            "RSRP≥-112采样点占比(电信共入)",
+        ]
+    )
 
     # 计算全省的汇总数据
     total_unicom = merged_stats["MRO-RSRP≥-112采样点数(联通自建)"].sum()
@@ -321,71 +145,93 @@ def create_weekly_4g_stats_for_excel(
     total_telecom = merged_stats["MRO-RSRP≥-112采样点数(电信自建)"].sum()
     total_telecom_samples = merged_stats["MRO-RSRP总采样点数(电信自建)"].sum()
 
+    # 计算全省占比
+    province_unicom_ratio = (
+        round(total_unicom * 100.0 / total_unicom_samples, 2)
+        if total_unicom_samples > 0
+        else 0
+    )
+    province_telecom_ratio = (
+        round(total_telecom * 100.0 / total_telecom_samples, 2)
+        if total_telecom_samples > 0
+        else 0
+    )
+
     # 创建全省统计数据
     province_stats = pl.DataFrame(
         {
             "城市名称": ["全省"],
             "MRO-RSRP≥-112采样点数(联通自建)": [total_unicom],
             "MRO-RSRP总采样点数(联通自建)": [total_unicom_samples],
-            "RSRP≥-112采样点占比(联通自建)": [
-                round(total_unicom * 100.0 / total_unicom_samples, 2)
-                if total_unicom_samples > 0
-                else 0
-            ],
+            "RSRP≥-112采样点占比(联通自建)": [province_unicom_ratio],
             "MRO-RSRP≥-112采样点数(电信自建)": [total_telecom],
             "MRO-RSRP总采样点数(电信自建)": [total_telecom_samples],
-            "RSRP≥-112采样点占比(电信共入)": [
-                round(total_telecom * 100.0 / total_telecom_samples, 2)
-                if total_telecom_samples > 0
-                else 0
-            ],
+            "RSRP≥-112采样点占比(电信共入)": [province_telecom_ratio],
         }
     )
 
     # 合并地市数据和全省数据
     final_stats = pl.concat([merged_stats, province_stats])
 
-    # 使用 when-then 结构创建排序键
-    sort_expr = pl.when(pl.col("城市名称") == "抚州").then(0)
-    for i, city in enumerate(city_order[1:], 1):
-        sort_expr = sort_expr.when(pl.col("城市名称") == city).then(i)
-    sort_expr = sort_expr.otherwise(len(city_order))
-
-    # 应用排序并选择最终需要的列
-    final_stats = (
-        final_stats.with_columns(sort_expr.alias("__sort_key"))
-        .sort("__sort_key")
-        .drop("__sort_key")
-    )
+    # 使用旧版 Polars 兼容的方式进行排序
+    final_stats = final_stats.with_columns(
+        pl.col("城市名称").cast(pl.Categorical)
+    ).sort(by=pl.Series(values=city_order, name="城市名称"))
 
     # 添加空列以匹配目标Excel格式
-    final_stats = final_stats.with_columns([
-        pl.lit(None).alias("MRO-RSRP≥-112采样点数"),
-        pl.lit(None).alias("MRO-RSRP总采样点数"),
-        pl.lit(None).alias("MRO-RSRP≥-112采样点占比"),
-        pl.lit(None).alias("CQI>=7数量"),
-        pl.lit(None).alias("CQI总数"),
-        pl.lit(None).alias("CQI优良率"),
-    ])
+    final_stats = final_stats.with_columns(
+        [
+            pl.lit(None).alias("MRO-RSRP≥-112采样点数"),
+            pl.lit(None).alias("MRO-RSRP总采样点数"),
+            pl.lit(None).alias("MRO-RSRP≥-112采样点占比"),
+            pl.lit(None).alias("CQI>=7数量"),
+            pl.lit(None).alias("CQI总数"),
+            pl.lit(None).alias("CQI优良率"),
+        ]
+    )
 
     # 调整列的顺序以匹配目标Excel格式
-    final_stats = final_stats.select([
-        "城市名称",
-        "MRO-RSRP≥-112采样点数(联通自建)",
-        "MRO-RSRP总采样点数(联通自建)",
-        "RSRP≥-112采样点占比(联通自建)",
-        "MRO-RSRP≥-112采样点数(电信自建)",
-        "MRO-RSRP总采样点数(电信自建)",
-        "RSRP≥-112采样点占比(电信共入)",
-        "MRO-RSRP≥-112采样点数",
-        "MRO-RSRP总采样点数",
-        "MRO-RSRP≥-112采样点占比",
-        "CQI>=7数量",
-        "CQI总数",
-        "CQI优良率",
-    ])
+    final_stats = final_stats.select(
+        [
+            "城市名称",
+            "MRO-RSRP≥-112采样点数(联通自建)",
+            "MRO-RSRP总采样点数(联通自建)",
+            "RSRP≥-112采样点占比(联通自建)",
+            "MRO-RSRP≥-112采样点数(电信自建)",
+            "MRO-RSRP总采样点数(电信自建)",
+            "RSRP≥-112采样点占比(电信共入)",
+            "MRO-RSRP≥-112采样点数",
+            "MRO-RSRP总采样点数",
+            "MRO-RSRP≥-112采样点占比",
+            "CQI>=7数量",
+            "CQI总数",
+            "CQI优良率",
+        ]
+    )
     return final_stats
 
+def calculate_and_fill_missing_columns(df: pl.DataFrame) -> pl.DataFrame:
+    """计算并填充缺失的列"""
+    return df.with_columns(
+        [
+            (
+                pl.col("MRO-RSRP≥-112采样点数(联通自建)") + pl.col("MRO-RSRP≥-112采样点数(电信自建)")
+            ).alias("MRO-RSRP≥-112采样点数"),
+            (pl.col("MRO-RSRP总采样点数(联通自建)") + pl.col("MRO-RSRP总采样点数(电信自建)")).alias(
+                "MRO-RSRP总采样点数"
+            ),
+        ]
+    ).with_columns(
+        (pl.col("MRO-RSRP≥-112采样点数") * 100.0 / pl.col("MRO-RSRP总采样点数")).alias(
+            "MRO-RSRP≥-112采样点占比"
+        )
+    ).with_columns(
+        [
+            pl.lit(None).alias("CQI>=7数量"),  # 占位符，根据实际数据填充
+            pl.lit(None).alias("CQI总数"),  # 占位符，根据实际数据填充
+            pl.lit(None).alias("CQI优良率"),  # 占位符，根据实际数据填充
+        ]
+    )
 
 def save_results(file_manager: ExcelManager, results: dict, base_name: str):
     """保存结果到不同格式"""
@@ -406,7 +252,6 @@ def save_results(file_manager: ExcelManager, results: dict, base_name: str):
     #     os.path.join(file_manager.base_dir, f"{base_name}_电信数据.parquet")
     # )
 
-
 if __name__ == "__main__":
     start_time = time.time()
 
@@ -414,17 +259,159 @@ if __name__ == "__main__":
 
     print("开始处理数据...")
 
+    # 基站号范围配置
+    unicom_ranges = {
+        "抚州": [
+            (565248, 567295),
+            (844928, 845183),
+            (840832, 841087),
+            (983040, 983551),
+            (985344, 985695),
+        ],
+        "南昌": [
+            (552960, 556287),
+            (843776, 844159),
+            (839680, 840063),
+            (556288, 556587),
+            (985856, 986367),
+        ],
+        "九江": [(557056, 559871), (844160, 844543), (840064, 840447)],
+        "宜春": [(569344, 572159), (845184, 845567), (841088, 841471)],
+        "吉安": [(567296, 569343), (845568, 845951), (841472, 841855), (984576, 985087)],
+        "赣州": [
+            (573440, 576511),
+            (845952, 846463),
+            (841856, 842367),
+            (556588, 557055),
+            (983552, 984575),
+        ],
+        "景德镇": [(559872, 561151), (846464, 846591), (842368, 842495)],
+        "萍乡": [(563968, 565247), (846592, 846719), (842496, 842623)],
+        "新余": [(576512, 577535), (846720, 846847), (842624, 842751)],
+        "鹰潭": [(572160, 573439), (846848, 846975), (842752, 842879)],
+        "上饶": [
+            (561152, 563967),
+            (844544, 844927),
+            (840448, 840831),
+            (985088, 985343),
+        ],
+        "共享预留": [(846976, 847871), (842880, 843775)],
+        "预留": [(986368, 987135)],
+    }
+
+    telecom_ranges = {
+        "南昌": [
+            (450560, 454655),
+            (473088, 473599),
+            (476160, 476927),
+            (477440, 477950),
+            (823296, 825855),
+            (839680, 840063),
+            (843776, 844159),
+            (478464, 478591),
+        ],
+        "九江": [
+            (454656, 456703),
+            (825856, 828415),
+            (840064, 840447),
+            (844160, 844543),
+            (478592, 478671),
+        ],
+        "上饶": [
+            (456704, 458751),
+            (473600, 473983),
+            (828416, 830975),
+            (840448, 840831),
+            (844544, 844927),
+            (478672, 478751),
+        ],
+        "抚州": [
+            (458752, 460799),
+            (473984, 474367),
+            (830976, 833535),
+            (840832, 841087),
+            (844928, 845183),
+            (478752, 478831),
+        ],
+        "宜春": [
+            (460800, 462847),
+            (474368, 474751),
+            (833536, 836095),
+            (841088, 841471),
+            (845184, 845567),
+            (478832, 478911),
+        ],
+        "吉安": [
+            (462848, 464895),
+            (474752, 475135),
+            (836096, 838655),
+            (841472, 841855),
+            (845568, 845951),
+            (478912, 478991),
+        ],
+        "赣州": [
+            (464896, 466943),
+            (475136, 475519),
+            (838656, 841215),
+            (841856, 842367),
+            (845952, 846463),
+            (478992, 479071),
+        ],
+        "景德镇": [
+            (466944, 468991),
+            (475520, 475903),
+            (841216, 841471),
+            (842368, 842495),
+            (846464, 846591),
+            (479072, 479151),
+        ],
+        "萍乡": [
+            (468992, 471039),
+            (475904, 476287),
+            (841472, 841855),
+            (842496, 842623),
+            (846592, 846719),
+            (479152, 479231),
+        ],
+        "新余": [
+            (471040, 473087),
+            (476288, 476927),
+            (841856, 842367),
+            (842624, 842751),
+            (846720, 846847),
+            (479232, 479311),
+        ],
+        "鹰潭": [
+            (473088, 475135),
+            (476928, 477439),
+            (842368, 842879),
+            (842752, 842879),
+            (846848, 846975),
+            (479312, 479391),
+        ],
+        "共享预留": [(475136, 477439), (842880, 843775)],
+        "预留": [(477440, 478463)],
+    }
+
     try:
         print("正在处理联通数据...")
         df_unicom = read_mr_data(file_manager, "4G MR联通50周.csv")
-        df_unicom, rsrp_stats_unicom = categorize_city_by_station_id_unicom(df_unicom)
+        df_unicom, rsrp_stats_unicom = categorize_city_by_station_id(
+            df_unicom, unicom_ranges, "联通自建"
+        )
 
         print("正在处理电信数据...")
         df_telecom = read_mr_data(file_manager, "4G MR电信50周.csv")
-        df_telecom, rsrp_stats_telecom = categorize_city_by_station_id_telecom(df_telecom)
+        df_telecom, rsrp_stats_telecom = categorize_city_by_station_id(
+            df_telecom, telecom_ranges, "电信自建"
+        )
 
         print("正在生成4G周指标...")
-        weekly_4g_stats = create_weekly_4g_stats_for_excel(rsrp_stats_unicom, rsrp_stats_telecom)
+        weekly_4g_stats = create_weekly_4g_stats_for_excel(
+            rsrp_stats_unicom, rsrp_stats_telecom
+        )
+
+        weekly_4g_stats = calculate_and_fill_missing_columns(weekly_4g_stats)
 
         # 选择需要的列
         df_unicom_save = df_unicom.select(

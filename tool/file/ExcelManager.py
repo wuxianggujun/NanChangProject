@@ -11,7 +11,6 @@ from openpyxl.styles import Font, Alignment
 from openpyxl.utils import get_column_letter
 import concurrent.futures
 
-
 class ExcelManager:
     """
     Excel 文件管理器，用于读取、写入和操作 Excel 文件。
@@ -66,14 +65,15 @@ class ExcelManager:
                 if isinstance(df, pl.DataFrame):
                     worksheet = workbook.create_sheet(sheet_name)
                     self._save_dataframe_to_sheet_with_progress(worksheet, df, progress_bar)
+
+                    # 如果提供了格式化器，则应用格式化
+                    if sheet_name == "_4G周指标":
+                        self.format_percentage(worksheet, "CQI优良率")
                 else:
                     if sheet_name != 'formatter':
                         logging.warning(f"{sheet_name} 不是 Polars DataFrame 类型，无法保存")
 
-            # 如果提供了格式化器，则应用格式化
-            if formatter:
-                formatter_instance = formatter(workbook)
-                formatter_instance.apply_formatting()
+
 
             workbook.save(self._output_path)
             logging.info(f"文件保存成功，路径：{self._output_path}")
@@ -82,6 +82,27 @@ class ExcelManager:
         except Exception as e:
             logging.error(f"数据保存失败: {e}")
             return None
+
+    def format_percentage(self, worksheet, column_name):
+        """格式化特定工作表中的指定列为百分比，保留两位小数"""
+        col_index = None
+        for col in worksheet.iter_cols():
+            if col[0].value == column_name:
+                col_index = col[0].column
+                break
+
+        if col_index is not None:
+            for cell in worksheet.iter_rows(min_row=2, min_col=col_index, max_col=col_index):
+                try:
+                    # 尝试将单元格值转换为浮点数
+                    value = float(cell[0].value)
+                    # 设置单元格的数字格式为百分比，保留两位小数
+                    cell[0].number_format = '0.00%'
+                    # 将值重新写回单元格，以应用百分比格式
+                    cell[0].value = value
+                except (ValueError, TypeError):
+                    # 如果转换失败（例如，单元格不是数字），则跳过此单元格
+                    pass
 
     def _save_dataframe_to_sheet_with_progress(self, worksheet, df: pl.DataFrame, progress_bar: bool = True):
         """

@@ -245,6 +245,7 @@ def calculate_and_fill_missing_columns(df: pl.DataFrame) -> pl.DataFrame:
 
 def save_results(file_manager: ExcelManager, results: dict, base_name: str):
     """保存结果到不同格式"""
+    
     # 保存主要统计结果为Excel
     file_manager.save_multiple_sheets(
         filename=f"{base_name}_统计结果",
@@ -284,8 +285,6 @@ def parse_station_id(df: pl.DataFrame, column_name: str = "对象编号") -> pl.
         pl.col(column_name).str.replace(r"^\s+|\s+$", "")
     )
 
-    print(df.filter(pl.col("对象编号") == "112.1.0"))
-    
     df_filtered = df.filter(
         ~pl.col(column_name).str.contains(r"^112\.1\.0$")  # 过滤掉 "112.1.0"
         & ~pl.col(column_name).str.contains(r"^112\.1\.DC=")  # 过滤掉以 "112.1.DC=" 开头的行
@@ -307,6 +306,142 @@ def parse_station_id(df: pl.DataFrame, column_name: str = "对象编号") -> pl.
 
     return df_result
 
+def process_cqi_data(df: pl.DataFrame, station_id_ranges: dict, station_id_column: str = "基站号") -> pl.DataFrame:
+    """
+    根据基站号划分地市，并累计 CQI >=7 到 CQI 15 的数据
+
+    Args:
+        df: 包含基站号和 CQI 数据的 DataFrame
+        station_id_ranges: 联通基站号范围字典
+        station_id_column: 基站号所在的列名
+
+    Returns:
+        按地市汇总的 CQI 数据 DataFrame
+    """
+    # 根据地市范围划分地市
+    when_expr = None
+    for city, ranges in station_id_ranges.items():
+        condition = None
+        for start, end in ranges:
+            if condition is None:
+                condition = pl.col(station_id_column).is_between(start, end, closed="both")
+            else:
+                condition = condition | pl.col(station_id_column).is_between(start, end, closed="both")
+
+        if when_expr is None:
+            when_expr = pl.when(condition).then(pl.lit(city))
+        else:
+            when_expr = when_expr.when(condition).then(pl.lit(city))
+
+    # 添加地市列
+    df = df.with_columns(when_expr.otherwise(pl.lit(None)).alias("地市"))
+
+    # 过滤掉地市为空的行
+    df = df.filter(pl.col("地市").is_not_null())
+
+    # 累加 CQI >=7 到 CQI 15 的数据
+    cqi_columns = [f"CQI {i}数量(个)" for i in range(7, 16)]  # CQI 7 到 CQI 15
+    df = df.with_columns(
+        [pl.col(col).cast(pl.Int64).fill_null(0) for col in cqi_columns]
+    )
+
+    # 计算 CQI>=7 的总和
+    df = df.with_columns(
+        pl.sum_horizontal(*cqi_columns).alias("CQI>=7数量")
+    )
+
+    # 累加 CQI 0 到 CQI 15 的数据
+    all_cqi_columns = [f"CQI {i}数量(个)" for i in range(0, 16)]
+    df = df.with_columns(
+        [pl.col(col).cast(pl.Int64).fill_null(0) for col in all_cqi_columns]
+    )
+
+    # 计算 CQI 总数
+    df = df.with_columns(
+        pl.sum_horizontal(*all_cqi_columns).alias("CQI总数")
+    )
+    
+    # 按地市汇总 CQI>=7 数据 和 CQI总数
+    cqi_stats = df.group_by("地市").agg(
+        [
+            pl.col("CQI>=7数量").sum().alias("CQI>=7数量"),
+            pl.col("CQI总数").sum().alias("CQI总数"),
+        ]
+    )
+
+    return cqi_stats
+    
+def fill_cqi_to_weekly_stats(weekly_stats: pl.DataFrame, cqi_stats: pl.DataFrame) -> pl.DataFrame:
+    """
+      将 CQI>=7 数据填充到 4G 周指标表中
+
+      Args:
+          weekly_stats: 4G 周指标表
+          cqi_stats: 按地市汇总的 CQI 数据
+
+      Returns:
+          更新后的 4G 周指标表
+      """
+    # 将 weekly_stats 的 "城市名称" 列转换为 String 类型
+    weekly_stats = weekly_stats.with_columns(
+        pl.col("城市名称").cast(pl.String)
+    )
+
+    # 将 cqi_stats 的 "地市" 列转换为 String 类型
+    cqi_stats = cqi_stats.with_columns(
+        pl.col("地市").cast(pl.String)
+    )
+
+    # 将 CQI 数据合并到 4G 周指标表中
+    weekly_stats = weekly_stats.join(
+        cqi_stats, left_on="城市名称", right_on="地市", how="left"
+    ).with_columns(
+        [
+            pl.col("CQI>=7数量_right").fill_null(0).alias("CQI>=7数量"),  # 将 CQI>=7数量_right 合并到 CQI>=7数量
+            pl.col("CQI总数_right").fill_null(0).alias("CQI总数")  # 将 CQI总数_right 合并到 CQI总数
+        ]
+    ).drop(["CQI>=7数量_right", "CQI总数_right"])  # 删除多余的列
+
+    # 计算 4G 优良率
+    weekly_stats = weekly_stats.with_columns(
+        (pl.col("CQI>=7数量") / pl.col("CQI总数")).alias("CQI优良率")
+    )
+    
+    # 按地市排序
+    city_order = [
+        "抚州",
+        "赣州",
+        "吉安",
+        "景德镇",
+        "九江",
+        "南昌",
+        "萍乡",
+        "上饶",
+        "新余",
+        "宜春",
+        "鹰潭",
+        "全省",
+    ]
+    
+    # 计算全省的 CQI>=7 数量总和、CQI 总数总和
+    province_cqi_ge7_sum = weekly_stats.filter(pl.col("城市名称") != "全省")["CQI>=7数量"].sum()
+    province_cqi_total_sum = weekly_stats.filter(pl.col("城市名称") != "全省")["CQI总数"].sum()
+
+    # 计算全省的 CQI 优良率
+    province_cqi_ratio = province_cqi_ge7_sum / province_cqi_total_sum if province_cqi_total_sum else 0.0
+    
+    # Add a temporary column with the sort order using a join
+    order_df = pl.DataFrame({"城市名称": city_order, "city_order": range(len(city_order))})
+    weekly_stats = weekly_stats.join(order_df, on="城市名称", how="left")
+
+    # Sort by the temporary column
+    weekly_stats = weekly_stats.sort("city_order")
+
+    # Remove the temporary column
+    weekly_stats = weekly_stats.drop("city_order")
+    
+    return weekly_stats
+    
 
 if __name__ == "__main__":
     start_time = time.time()
@@ -482,7 +617,11 @@ if __name__ == "__main__":
         df_perf = file_manager.read_csv(file_name="perf_query_result20241210103124.csv", encoding="gbk")
         df_perf = parse_station_id(df_perf, "对象编号")
 
-        print("正在保存处理结果...")
+        cqi_stats = process_cqi_data(df_perf,unicom_ranges)
+
+        # 将 CQI 数据合并到 4G 周指标表中
+        weekly_4g_stats = fill_cqi_to_weekly_stats(weekly_4g_stats, cqi_stats)
+        
         save_results(
             file_manager,
             {
@@ -491,7 +630,7 @@ if __name__ == "__main__":
                 "rsrp_stats_telecom": rsrp_stats_telecom,
                 "df_unicom": df_unicom_save,
                 "df_telecom": df_telecom_save,
-                "perf_query": df_perf,
+                "perf_query": df_perf
             },
             "4G MR数据分析",
         )

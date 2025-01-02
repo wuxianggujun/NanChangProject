@@ -1,3 +1,5 @@
+import logging
+
 import polars as pl
 from tool.file import ExcelManager  # 假设你的 ExcelManager 类在 excel_manager.py 文件中
 import time
@@ -8,6 +10,7 @@ from openpyxl.styles import Alignment, Border, Side, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.cell import range_boundaries
 from openpyxl.cell import MergedCell
+
 
 def read_mr_data(file_manager: ExcelManager, filename: str) -> pl.DataFrame:
     """读取 MR 数据，处理数据类型问题"""
@@ -21,11 +24,12 @@ def read_mr_data(file_manager: ExcelManager, filename: str) -> pl.DataFrame:
         },
     )
 
+
 def categorize_city_by_station_id(
-    df: pl.DataFrame,
-    station_id_ranges: dict,
-    operator_suffix: str,
-    station_id_column: str = "基站号",
+        df: pl.DataFrame,
+        station_id_ranges: dict,
+        operator_suffix: str,
+        station_id_column: str = "基站号",
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """根据基站号范围判断地市"""
     if station_id_column not in df.columns:
@@ -37,7 +41,9 @@ def categorize_city_by_station_id(
         condition = None
         for start, end in ranges:
             if condition is None:
-                condition = pl.col(station_id_column).is_between(start, end, closed="both")
+                condition = pl.col(station_id_column).is_between(
+                    start, end, closed="both"
+                )
             else:
                 condition = condition | pl.col(station_id_column).is_between(
                     start, end, closed="both"
@@ -53,6 +59,7 @@ def categorize_city_by_station_id(
 
     rsrp_stats = aggregate_rsrp_by_city(df, operator_suffix)
     return df, rsrp_stats
+
 
 def aggregate_rsrp_by_city(df: pl.DataFrame, operator_suffix: str) -> pl.DataFrame:
     """按地市统计 MRO-RSRP 数据"""
@@ -81,8 +88,9 @@ def aggregate_rsrp_by_city(df: pl.DataFrame, operator_suffix: str) -> pl.DataFra
         ]
     )
 
+
 def create_weekly_4g_stats_for_excel(
-    rsrp_stats_unicom: pl.DataFrame, rsrp_stats_telecom: pl.DataFrame
+        rsrp_stats_unicom: pl.DataFrame, rsrp_stats_telecom: pl.DataFrame
 ) -> pl.DataFrame:
     """
     创建4G周指标表，用于生成Excel报表
@@ -105,17 +113,17 @@ def create_weekly_4g_stats_for_excel(
     # 预先计算各运营商的指标，并确保数据类型一致
     rsrp_stats_unicom = rsrp_stats_unicom.rename({"地市": "城市名称"}).with_columns(
         (
-            pl.col("MRO-RSRP≥-112采样点数(联通自建)").cast(pl.Float64)
-            * 100.0
-            / pl.col("MRO-RSRP总采样点数(联通自建)").cast(pl.Float64)
+                pl.col("MRO-RSRP≥-112采样点数(联通自建)").cast(pl.Float64)
+                * 100.0
+                / pl.col("MRO-RSRP总采样点数(联通自建)").cast(pl.Float64)
         ).alias("RSRP≥-112采样点占比(联通自建)")
     )
 
     rsrp_stats_telecom = rsrp_stats_telecom.rename({"地市": "城市名称"}).with_columns(
         (
-            pl.col("MRO-RSRP≥-112采样点数(电信自建)").cast(pl.Float64)
-            * 100.0
-            / pl.col("MRO-RSRP总采样点数(电信自建)").cast(pl.Float64)
+                pl.col("MRO-RSRP≥-112采样点数(电信自建)").cast(pl.Float64)
+                * 100.0
+                / pl.col("MRO-RSRP总采样点数(电信自建)").cast(pl.Float64)
         ).alias("RSRP≥-112采样点占比(电信共入)")
     )
 
@@ -210,12 +218,13 @@ def create_weekly_4g_stats_for_excel(
     )
     return final_stats
 
+
 def calculate_and_fill_missing_columns(df: pl.DataFrame) -> pl.DataFrame:
     """计算并填充缺失的列"""
     return df.with_columns(
         [
             (
-                pl.col("MRO-RSRP≥-112采样点数(联通自建)") + pl.col("MRO-RSRP≥-112采样点数(电信自建)")
+                    pl.col("MRO-RSRP≥-112采样点数(联通自建)") + pl.col("MRO-RSRP≥-112采样点数(电信自建)")
             ).alias("MRO-RSRP≥-112采样点数"),
             (pl.col("MRO-RSRP总采样点数(联通自建)") + pl.col("MRO-RSRP总采样点数(电信自建)")).alias(
                 "MRO-RSRP总采样点数"
@@ -233,6 +242,7 @@ def calculate_and_fill_missing_columns(df: pl.DataFrame) -> pl.DataFrame:
         ]
     )
 
+
 def save_results(file_manager: ExcelManager, results: dict, base_name: str):
     """保存结果到不同格式"""
     # 保存主要统计结果为Excel
@@ -242,15 +252,61 @@ def save_results(file_manager: ExcelManager, results: dict, base_name: str):
         _4G周指标=results["weekly_4g_stats"],
         联通指标统计=results["rsrp_stats_unicom"],
         电信指标统计=results["rsrp_stats_telecom"],
+        perf_query=results["perf_query"],
     )
 
-    # # 保存大量原始数据为parquet格式
-    # results["df_unicom"].write_parquet(
-    #     os.path.join(file_manager.base_dir, f"{base_name}_联通数据.parquet")
-    # )
-    # results["df_telecom"].write_parquet(
-    #     os.path.join(file_manager.base_dir, f"{base_name}_电信数据.parquet")
-    # )
+
+def parse_station_id(df: pl.DataFrame, column_name: str = "对象编号") -> pl.DataFrame:
+    """
+    解析对象编号列，提取基站号
+
+    Args:
+        df: 包含对象编号的DataFrame
+        column_name: 对象编号所在的列名
+
+    Returns:
+        包含基站号的新DataFrame
+    """
+
+    # 定义一个函数来解析基站号
+    def extract_station_id(id_str: str) -> int:
+        if "." in id_str:
+            parts = id_str.split(".")
+            if len(parts) >= 2:
+                try:
+                    return int(parts[1])
+                except ValueError:
+                    return None
+        return None
+
+    # 去除字符串两端的空格和不可见字符
+    df = df.with_columns(
+        pl.col(column_name).str.replace(r"^\s+|\s+$", "")
+    )
+
+    print(df.filter(pl.col("对象编号") == "112.1.0"))
+    
+    df_filtered = df.filter(
+        ~pl.col(column_name).str.contains(r"^112\.1\.0$")  # 过滤掉 "112.1.0"
+        & ~pl.col(column_name).str.contains(r"^112\.1\.DC=")  # 过滤掉以 "112.1.DC=" 开头的行
+        & ~pl.col(column_name).str.contains(r"^201")  # 过滤掉以 "201" 开头的行
+        & ~pl.col(column_name).str.contains(
+            r"^112\.SubNetwork=ZTE_UME_SYSTEM")  # 过滤掉以 "112.SubNetwork=ZTE_UME_SYSTEM" 开头的行
+        & ~pl.col(column_name).str.contains(r"www\.zte\.com\.cn$")  # 过滤掉以 "www.zte.com.cn" 结尾的行
+    )
+
+    # 3. 尝试解析基站号
+    df_with_station_id = df_filtered.with_columns(
+        pl.col(column_name).map_elements(extract_station_id, return_dtype=pl.Int64).alias("基站号")
+    )
+    
+    # 4. 删除基站号为空的行
+    df_result = df_with_station_id.filter(
+        pl.col("基站号").is_not_null()  # 保留基站号不为空的行
+    )
+
+    return df_result
+
 
 if __name__ == "__main__":
     start_time = time.time()
@@ -421,6 +477,11 @@ if __name__ == "__main__":
             ["地市", "基站号", "MRO-RSRP≥-112采样点数", "MRO-RSRP总采样点数"]
         )
 
+        # 读取并解析新的CSV文件
+        print("正在读取并解析新的CSV文件...")
+        df_perf = file_manager.read_csv(file_name="perf_query_result20241210103124.csv", encoding="gbk")
+        df_perf = parse_station_id(df_perf, "对象编号")
+
         print("正在保存处理结果...")
         save_results(
             file_manager,
@@ -430,6 +491,7 @@ if __name__ == "__main__":
                 "rsrp_stats_telecom": rsrp_stats_telecom,
                 "df_unicom": df_unicom_save,
                 "df_telecom": df_telecom_save,
+                "perf_query": df_perf,
             },
             "4G MR数据分析",
         )

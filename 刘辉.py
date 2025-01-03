@@ -10,7 +10,10 @@ from openpyxl.styles import Alignment, Border, Side, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.cell import range_boundaries
 from openpyxl.cell import MergedCell
+import yaml
 
+with open("WorkDocument\\刘辉\\config\\config.yaml","r",encoding="utf-8") as f:
+    config = yaml.safe_load(f)
 
 def read_mr_data(file_manager: ExcelManager, filename: str) -> pl.DataFrame:
     """读取 MR 数据，处理数据类型问题"""
@@ -29,17 +32,26 @@ def categorize_city_by_station_id(
         df: pl.DataFrame,
         station_id_ranges: dict,
         operator_suffix: str,
+        mode:str,
         station_id_column: str = "基站号",
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """根据基站号范围判断地市"""
     if station_id_column not in df.columns:
         raise ValueError(f"数据中缺少必要的列: {station_id_column}")
-
+        # 选择对应运营商和模式的基站号范围配置
+    if operator_suffix == "联通自建":
+        operator_ranges = station_id_ranges.get("联通", {}).get(mode, [])
+    elif operator_suffix == "电信自建":
+        operator_ranges = station_id_ranges.get("电信", {}).get(mode, [])
+    else:
+        raise ValueError(f"未知的运营商: {operator_suffix}")
+        
     # 使用表达式链构建条件
     when_expr = None
-    for city, ranges in station_id_ranges.items():
+    for city_data in operator_ranges:  # 遍历数组表格
+        city = city_data['name']
         condition = None
-        for start, end in ranges:
+        for start, end in city_data['ranges']:
             if condition is None:
                 condition = pl.col(station_id_column).is_between(
                     start, end, closed="both"
@@ -306,7 +318,7 @@ def parse_station_id(df: pl.DataFrame, column_name: str = "对象编号") -> pl.
 
     return df_result
 
-def process_cqi_data(df: pl.DataFrame, station_id_ranges: dict, station_id_column: str = "基站号") -> pl.DataFrame:
+def process_cqi_data(df: pl.DataFrame, station_id_ranges: dict,mode:str, station_id_column: str = "基站号") -> pl.DataFrame:
     """
     根据基站号划分地市，并累计 CQI >=7 到 CQI 15 的数据
 
@@ -318,21 +330,28 @@ def process_cqi_data(df: pl.DataFrame, station_id_ranges: dict, station_id_colum
     Returns:
         按地市汇总的 CQI 数据 DataFrame
     """
+    # 过滤指定 mode 的基站号范围
+    operator_ranges = station_id_ranges.get("联通", {}).get(mode, [])
     # 根据地市范围划分地市
     when_expr = None
-    for city, ranges in station_id_ranges.items():
+    for city_data in operator_ranges:  # 遍历数组表格
+        city = city_data['name']
         condition = None
-        for start, end in ranges:
+        for start, end in city_data['ranges']:
             if condition is None:
-                condition = pl.col(station_id_column).is_between(start, end, closed="both")
+                condition = pl.col(station_id_column).is_between(
+                    start, end, closed="both"
+                )
             else:
-                condition = condition | pl.col(station_id_column).is_between(start, end, closed="both")
+                condition = condition | pl.col(station_id_column).is_between(
+                    start, end, closed="both"
+                )
 
         if when_expr is None:
             when_expr = pl.when(condition).then(pl.lit(city))
         else:
             when_expr = when_expr.when(condition).then(pl.lit(city))
-
+            
     # 添加地市列
     df = df.with_columns(when_expr.otherwise(pl.lit(None)).alias("地市"))
 
@@ -480,158 +499,37 @@ def fill_cqi_to_weekly_stats(weekly_stats: pl.DataFrame, cqi_stats: pl.DataFrame
 if __name__ == "__main__":
     start_time = time.time()
 
-    file_manager = ExcelManager("WorkDocument\\刘辉")
+    # 指定模式 (4G 或 5G)
+    mode = "4G"  # 你可以根据需要修改为 "5G"
+    
+    file_manager = ExcelManager(config["paths"]["working_directory"])
 
     print("开始处理数据...")
-
-    # 基站号范围配置
-    unicom_ranges = {
-        "抚州": [
-            (565248, 567295),
-            (844928, 845183),
-            (840832, 841087),
-            (983040, 983551),
-            (985344, 985695),
-        ],
-        "南昌": [
-            (552960, 556287),
-            (843776, 844159),
-            (839680, 840063),
-            (556288, 556587),
-            (985856, 986367),
-        ],
-        "九江": [(557056, 559871), (844160, 844543), (840064, 840447)],
-        "宜春": [(569344, 572159), (845184, 845567), (841088, 841471)],
-        "吉安": [(567296, 569343), (845568, 845951), (841472, 841855), (984576, 985087)],
-        "赣州": [
-            (573440, 576511),
-            (845952, 846463),
-            (841856, 842367),
-            (556588, 557055),
-            (983552, 984575),
-        ],
-        "景德镇": [(559872, 561151), (846464, 846591), (842368, 842495)],
-        "萍乡": [(563968, 565247), (846592, 846719), (842496, 842623)],
-        "新余": [(576512, 577535), (846720, 846847), (842624, 842751)],
-        "鹰潭": [(572160, 573439), (846848, 846975), (842752, 842879)],
-        "上饶": [
-            (561152, 563967),
-            (844544, 844927),
-            (840448, 840831),
-            (985088, 985343),
-        ],
-        "共享预留": [(846976, 847871), (842880, 843775)],
-        "预留": [(986368, 987135)],
-    }
-
-    telecom_ranges = {
-        "南昌": [
-            (450560, 454655),
-            (473088, 473599),
-            (476160, 476927),
-            (477440, 477950),
-            (823296, 825855),
-            (839680, 840063),
-            (843776, 844159),
-            (478464, 478591),
-        ],
-        "九江": [
-            (454656, 456703),
-            (825856, 828415),
-            (840064, 840447),
-            (844160, 844543),
-            (478592, 478671),
-        ],
-        "上饶": [
-            (456704, 458751),
-            (473600, 473983),
-            (828416, 830975),
-            (840448, 840831),
-            (844544, 844927),
-            (478672, 478751),
-        ],
-        "抚州": [
-            (458752, 460799),
-            (473984, 474367),
-            (830976, 833535),
-            (840832, 841087),
-            (844928, 845183),
-            (478752, 478831),
-        ],
-        "宜春": [
-            (460800, 462847),
-            (474368, 474751),
-            (833536, 836095),
-            (841088, 841471),
-            (845184, 845567),
-            (478832, 478911),
-        ],
-        "吉安": [
-            (462848, 464895),
-            (474752, 475135),
-            (836096, 838655),
-            (841472, 841855),
-            (845568, 845951),
-            (478912, 478991),
-        ],
-        "赣州": [
-            (464896, 466943),
-            (475136, 475519),
-            (838656, 841215),
-            (841856, 842367),
-            (845952, 846463),
-            (478992, 479071),
-        ],
-        "景德镇": [
-            (466944, 468991),
-            (475520, 475903),
-            (841216, 841471),
-            (842368, 842495),
-            (846464, 846591),
-            (479072, 479151),
-        ],
-        "萍乡": [
-            (468992, 471039),
-            (475904, 476287),
-            (841472, 841855),
-            (842496, 842623),
-            (846592, 846719),
-            (479152, 479231),
-        ],
-        "新余": [
-            (471040, 473087),
-            (476288, 476927),
-            (841856, 842367),
-            (842624, 842751),
-            (846720, 846847),
-            (479232, 479311),
-        ],
-        "鹰潭": [
-            (473088, 475135),
-            (476928, 477439),
-            (842368, 842879),
-            (842752, 842879),
-            (846848, 846975),
-            (479312, 479391),
-        ],
-        "共享预留": [(475136, 477439), (842880, 843775)],
-        "预留": [(477440, 478463)],
-    }
-
+    # 根据 mode 选择路径配置
+    paths = config["paths"][mode]
+    
+    # 基站号范围配置从配置文件加载
+    # unicom_ranges = config["network_ranges"]["联通"][mode]
+    # telecom_ranges = config["network_ranges"]["电信"][mode]
+    network_ranges = config["network_ranges"]
     try:
-        print("正在处理联通数据...")
-        df_unicom = read_mr_data(file_manager, "4G MR联通50周.csv")
+        print(f"正在处理{mode}联通数据...")
+        df_unicom = read_mr_data(
+            file_manager, paths["unicom_mr_data"]
+        )
         df_unicom, rsrp_stats_unicom = categorize_city_by_station_id(
-            df_unicom, unicom_ranges, "联通自建"
+            df_unicom, network_ranges, "联通自建", mode
         )
 
-        print("正在处理电信数据...")
-        df_telecom = read_mr_data(file_manager, "4G MR电信50周.csv")
+        print(f"正在处理{mode}电信数据...")
+        df_telecom = read_mr_data(
+            file_manager, paths["telecom_mr_data"]
+        )
         df_telecom, rsrp_stats_telecom = categorize_city_by_station_id(
-            df_telecom, telecom_ranges, "电信自建"
+            df_telecom, network_ranges, "电信自建", mode
         )
 
-        print("正在生成4G周指标...")
+        print(f"正在生成{mode}周指标...")
         weekly_4g_stats = create_weekly_4g_stats_for_excel(
             rsrp_stats_unicom, rsrp_stats_telecom
         )
@@ -647,11 +545,11 @@ if __name__ == "__main__":
         )
 
         # 读取并解析新的CSV文件
-        print("正在读取并解析新的CSV文件...")
-        df_perf = file_manager.read_csv(file_name="perf_query_result20241210103124.csv", encoding="gbk")
+        print(f"正在读取并解析{mode}新的CSV文件...")
+        df_perf = file_manager.read_csv(file_name=paths["perf_query_data"], encoding="gbk")
         df_perf = parse_station_id(df_perf, "对象编号")
 
-        cqi_stats = process_cqi_data(df_perf,unicom_ranges)
+        cqi_stats = process_cqi_data(df_perf,network_ranges,mode)
 
         # 将 CQI 数据合并到 4G 周指标表中
         weekly_4g_stats = fill_cqi_to_weekly_stats(weekly_4g_stats, cqi_stats)
@@ -666,7 +564,7 @@ if __name__ == "__main__":
                 "df_telecom": df_telecom_save,
                 "perf_query": df_perf
             },
-            "4G MR数据分析",
+            paths["output_base_name"],
         )
 
         end_time = time.time()

@@ -68,12 +68,13 @@ class ExcelManager:
 
                     # 如果提供了格式化器，则应用格式化
                     if sheet_name == "_4G周指标":
+                        self.format_percentage(worksheet, "RSRP≥-112采样点占比(联通自建)")
+                        self.format_percentage(worksheet, "RSRP≥-112采样点占比(电信共入)")
+                        self.format_percentage(worksheet, "MRO-RSRP≥-112采样点占比")
                         self.format_percentage(worksheet, "CQI优良率")
                 else:
                     if sheet_name != 'formatter':
                         logging.warning(f"{sheet_name} 不是 Polars DataFrame 类型，无法保存")
-
-
 
             workbook.save(self._output_path)
             logging.info(f"文件保存成功，路径：{self._output_path}")
@@ -96,10 +97,15 @@ class ExcelManager:
                 try:
                     # 尝试将单元格值转换为浮点数
                     value = float(cell[0].value)
-                    # 设置单元格的数字格式为百分比，保留两位小数
-                    cell[0].number_format = '0.00%'
-                    # 将值重新写回单元格，以应用百分比格式
-                    cell[0].value = value
+                    # 确保值在 0 到 1 之间
+                    if 0 <= value <= 1:
+                        # 直接将数字格式设置为百分比，保留两位小数，无需再乘以 100
+                        cell[0].number_format = '0.00%'
+                        cell[0].value = value  # 确保原始值被保留
+                    else:
+                        # 对于大于 1 的值，假定已经是百分比形式，直接转换为百分比格式
+                        cell[0].number_format = '0.00%'
+                        cell[0].value = value / 100
                 except (ValueError, TypeError):
                     # 如果转换失败（例如，单元格不是数字），则跳过此单元格
                     pass

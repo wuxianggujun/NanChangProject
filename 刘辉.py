@@ -429,7 +429,41 @@ def fill_cqi_to_weekly_stats(weekly_stats: pl.DataFrame, cqi_stats: pl.DataFrame
 
     # 计算全省的 CQI 优良率
     province_cqi_ratio = province_cqi_ge7_sum / province_cqi_total_sum if province_cqi_total_sum else 0.0
-    
+
+    # 更新全省行的数据
+    weekly_stats = weekly_stats.with_columns(
+        pl.when(pl.col("城市名称") == "全省")
+        .then(
+            pl.Series(
+                name="CQI>=7数量",
+                values=[province_cqi_ge7_sum],
+                dtype=pl.Float64,  # 使用统计的数据类型
+            )
+        )
+        .otherwise(pl.col("CQI>=7数量"))
+        .alias("CQI>=7数量")
+    )
+
+    weekly_stats = weekly_stats.with_columns(
+        pl.when(pl.col("城市名称") == "全省")
+        .then(
+            pl.Series(
+                name="CQI总数",
+                values=[province_cqi_total_sum],
+                dtype=pl.Float64,  # 使用统计的数据类型
+            )
+        )
+        .otherwise(pl.col("CQI总数"))
+        .alias("CQI总数")
+    )
+
+    weekly_stats = weekly_stats.with_columns(
+        pl.when(pl.col("城市名称") == "全省")
+        .then(pl.lit(province_cqi_ratio))
+        .otherwise(pl.col("CQI优良率"))
+        .alias("CQI优良率")
+    )
+
     # Add a temporary column with the sort order using a join
     order_df = pl.DataFrame({"城市名称": city_order, "city_order": range(len(city_order))})
     weekly_stats = weekly_stats.join(order_df, on="城市名称", how="left")
@@ -439,7 +473,7 @@ def fill_cqi_to_weekly_stats(weekly_stats: pl.DataFrame, cqi_stats: pl.DataFrame
 
     # Remove the temporary column
     weekly_stats = weekly_stats.drop("city_order")
-    
+
     return weekly_stats
     
 

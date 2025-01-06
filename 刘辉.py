@@ -255,19 +255,17 @@ def calculate_and_fill_missing_columns(df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def save_results(file_manager: ExcelManager, results: dict, base_name: str):
+def save_results(file_manager: ExcelManager, results_4G: dict,df_5G:pl.DataFrame,output_file_name:str,sheet_name_4G:str,sheet_name_5G:str):
     """保存结果到不同格式"""
-    
     # 保存主要统计结果为Excel
     file_manager.save_multiple_sheets(
-        filename=f"{base_name}_统计结果",
-        # formatter=ExcelFormatter,
-        _4G周指标=results["weekly_4g_stats"],
-        联通指标统计=results["rsrp_stats_unicom"],
-        电信指标统计=results["rsrp_stats_telecom"],
-        perf_query=results["perf_query"],
+        filename=output_file_name,
+        **{sheet_name_4G: results_4G["weekly_stats"]},
+        联通指标统计=results_4G["rsrp_stats_unicom"],
+        电信指标统计=results_4G["rsrp_stats_telecom"],
+        perf_query=results_4G["perf_query"],
+        **{sheet_name_5G: df_5G}
     )
-
 
 def parse_station_id(df: pl.DataFrame, column_name: str = "对象编号") -> pl.DataFrame:
     """
@@ -498,88 +496,94 @@ def fill_cqi_to_weekly_stats(weekly_stats: pl.DataFrame, cqi_stats: pl.DataFrame
 
 if __name__ == "__main__":
     start_time = time.time()
-
-    # 指定模式 (4G 或 5G)
-    mode = "4G"  # 你可以根据需要修改为 "5G"
-    
+    results_4G = {} # 用于存储 4G 的所有结果
+    df_5g = None  # 用于存储 5G DataFrame
     file_manager = ExcelManager(config["paths"]["working_directory"])
 
-    print("开始处理数据...")
-    # 根据 mode 选择路径配置
-    paths = config["paths"][mode]
-    
-    # 基站号范围配置从配置文件加载
-    # unicom_ranges = config["network_ranges"]["联通"][mode]
-    # telecom_ranges = config["network_ranges"]["电信"][mode]
-    network_ranges = config["network_ranges"]
-    try:
-        print(f"正在处理{mode}联通数据...")
-        df_unicom = read_mr_data(
-            file_manager, paths["unicom_mr_data"]
-        )
-        df_unicom, rsrp_stats_unicom = categorize_city_by_station_id(
-            df_unicom, network_ranges, "联通自建", mode
-        )
+    for mode in ["4G", "5G"]:
+        print(f"开始处理 {mode} 数据...")
 
-        print(f"正在处理{mode}电信数据...")
-        df_telecom = read_mr_data(
-            file_manager, paths["telecom_mr_data"]
-        )
-        df_telecom, rsrp_stats_telecom = categorize_city_by_station_id(
-            df_telecom, network_ranges, "电信自建", mode
-        )
-
-        print(f"正在生成{mode}周指标...")
-        weekly_4g_stats = create_weekly_4g_stats_for_excel(
-            rsrp_stats_unicom, rsrp_stats_telecom
-        )
-
-        weekly_4g_stats = calculate_and_fill_missing_columns(weekly_4g_stats)
-
-        # 选择需要的列
-        df_unicom_save = df_unicom.select(
-            ["地市", "基站号", "MRO-RSRP≥-112采样点数", "MRO-RSRP总采样点数"]
-        )
-        df_telecom_save = df_telecom.select(
-            ["地市", "基站号", "MRO-RSRP≥-112采样点数", "MRO-RSRP总采样点数"]
-        )
-
-        # 读取并解析新的CSV文件
-        print(f"正在读取并解析{mode}新的CSV文件...")
-        df_perf = file_manager.read_csv(file_name=paths["perf_query_data"], encoding="gbk")
-        df_perf = parse_station_id(df_perf, "对象编号")
-
-        cqi_stats = process_cqi_data(df_perf,network_ranges,mode)
-
-        # 将 CQI 数据合并到 4G 周指标表中
-        weekly_4g_stats = fill_cqi_to_weekly_stats(weekly_4g_stats, cqi_stats)
+        # 根据 mode 选择路径配置
+        paths = config["paths"][mode]
         
-        save_results(
-            file_manager,
-            {
-                "weekly_4g_stats": weekly_4g_stats,
-                "rsrp_stats_unicom": rsrp_stats_unicom,
-                "rsrp_stats_telecom": rsrp_stats_telecom,
-                "df_unicom": df_unicom_save,
-                "df_telecom": df_telecom_save,
-                "perf_query": df_perf
-            },
-            paths["output_base_name"],
-        )
+        network_ranges = config["network_ranges"]
+        try:
+            if mode == "4G":
+                # 4G 的处理逻辑 (保持不变)
+                print(f"正在处理{mode}联通数据...")
+                df_unicom = read_mr_data(
+                    file_manager, paths["unicom_mr_data"]
+                )
+                df_unicom, rsrp_stats_unicom = categorize_city_by_station_id(
+                    df_unicom, network_ranges, "联通自建", mode
+                )
+        
+                print(f"正在处理{mode}电信数据...")
+                df_telecom = read_mr_data(
+                    file_manager, paths["telecom_mr_data"]
+                )
+                df_telecom, rsrp_stats_telecom = categorize_city_by_station_id(
+                    df_telecom, network_ranges, "电信自建", mode
+                )
+    
+                print(f"正在生成{mode}周指标...")
+                weekly_stats = create_weekly_4g_stats_for_excel(
+                    rsrp_stats_unicom, rsrp_stats_telecom
+                )
+    
+                weekly_stats = calculate_and_fill_missing_columns(weekly_stats)
+    
+                # 选择需要的列
+                df_unicom_save = df_unicom.select(
+                    ["地市", "基站号", "MRO-RSRP≥-112采样点数", "MRO-RSRP总采样点数"]
+                )
+                df_telecom_save = df_telecom.select(
+                    ["地市", "基站号", "MRO-RSRP≥-112采样点数", "MRO-RSRP总采样点数"]
+                )
+        
+                # 读取并解析新的CSV文件
+                print(f"正在读取并解析{mode}新的CSV文件...")
+                df_perf = file_manager.read_csv(file_name=paths["perf_query_data"], encoding="gbk")
+                df_perf = parse_station_id(df_perf, "对象编号")
+    
+                cqi_stats = process_cqi_data(df_perf,network_ranges,mode)
+    
+                # 将 CQI 数据合并到 4G 周指标表中
+                weekly_stats = fill_cqi_to_weekly_stats(weekly_stats, cqi_stats)
 
-        end_time = time.time()
-        execution_time = end_time - start_time
-        formatted_time = str(timedelta(seconds=int(execution_time)))
+                results_4G = {
+                    "weekly_stats": weekly_stats,
+                    "rsrp_stats_unicom": rsrp_stats_unicom,
+                    "rsrp_stats_telecom": rsrp_stats_telecom,
+                    "df_unicom": df_unicom_save,
+                    "df_telecom": df_telecom_save,
+                    "perf_query": df_perf,
+                }
+            elif mode == "5G":
+                # 5G 的处理逻辑 (只读取 5G MR 联通数据, 进行必要的处理)
+                print(f"正在处理{mode}联通数据...")
+                df_5g = read_mr_data(file_manager, paths["unicom_mr_data"])
+            
+        except Exception as e:
+            print(f"\n处理过程中出现错误:")
+            print(f"错误类型: {type(e).__name__}")
+            print(f"错误信息: {str(e)}")
+    
+    
+    # 在循环结束后，一次性保存所有结果
+    save_results(
+        file_manager,
+        results_4G,
+        df_5g,
+        config["paths"]["output_file_name"],
+        config["paths"]["4G"]["output_sheet_name"],
+        config["paths"]["5G"]["output_sheet_name"],
+    )
 
-        print(f"\n数据处理完成!")
-        print(f"总运行时间: {formatted_time}")
+    end_time = time.time()
+    execution_time = end_time - start_time
+    formatted_time = str(timedelta(seconds=int(execution_time)))
 
-    except Exception as e:
-        print(f"\n处理过程中出现错误:")
-        print(f"错误类型: {type(e).__name__}")
-        print(f"错误信息: {str(e)}")
-
-        end_time = time.time()
-        execution_time = end_time - start_time
-        formatted_time = str(timedelta(seconds=int(execution_time)))
-        print(f"\n运行时间: {formatted_time}")
+    print(f"\n 数据处理完成!")
+    print(f"总运行时间: {formatted_time}")
+    

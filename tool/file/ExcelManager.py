@@ -32,7 +32,7 @@ class ExcelManager:
         """获取基础目录"""
         return self.base_dir
 
-    def save_multiple_sheets(self, filename: str, formatter=None, progress_bar: bool = True, **sheets) -> str:
+    def save_multiple_sheets(self, filename: str, progress_bar: bool = True, **sheets) -> str:
         """
         将多个 Polars DataFrame 保存到一个 Excel 文件的多个 sheet，并支持进度条显示。
 
@@ -67,14 +67,13 @@ class ExcelManager:
                     self._save_dataframe_to_sheet_with_progress(worksheet, df, progress_bar)
 
                     # 如果提供了格式化器，则应用格式化
-                    if sheet_name == "_4G周指标":
+                    if sheet_name == "4G周指标":
                         self.format_percentage(worksheet, "RSRP≥-112采样点占比(联通自建)")
                         self.format_percentage(worksheet, "RSRP≥-112采样点占比(电信共入)")
                         self.format_percentage(worksheet, "MRO-RSRP≥-112采样点占比")
                         self.format_percentage(worksheet, "CQI优良率")
                 else:
-                    if sheet_name != 'formatter':
-                        logging.warning(f"{sheet_name} 不是 Polars DataFrame 类型，无法保存")
+                    logging.warning(f"{sheet_name} 不是 Polars DataFrame 类型，无法保存")
 
             workbook.save(self._output_path)
             logging.info(f"文件保存成功，路径：{self._output_path}")

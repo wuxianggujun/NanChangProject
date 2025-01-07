@@ -12,8 +12,9 @@ from openpyxl.utils.cell import range_boundaries
 from openpyxl.cell import MergedCell
 import yaml
 
-with open("WorkDocument\\刘辉\\config\\config.yaml","r",encoding="utf-8") as f:
+with open("WorkDocument\\刘辉\\config\\config.yaml", "r", encoding="utf-8") as f:
     config = yaml.safe_load(f)
+
 
 def read_mr_data(file_manager: ExcelManager, filename: str) -> pl.DataFrame:
     """读取 MR 数据，处理数据类型问题"""
@@ -28,11 +29,100 @@ def read_mr_data(file_manager: ExcelManager, filename: str) -> pl.DataFrame:
     )
 
 
+def categorize_city_by_station_id_5g(
+        df: pl.DataFrame,
+        station_id_ranges: dict,
+        operator: str = "联通",
+        station_id_column: str = "基站号",
+) -> pl.DataFrame:
+    """根据基站号范围判断 5G 地市"""
+    if station_id_column not in df.columns:
+        raise ValueError(f"数据中缺少必要的列: {station_id_column}")
+
+    # 确保存在 "地市" 列
+    if "地市" not in df.columns:
+        df = df.with_columns(pl.lit(None).alias("地市"))
+
+    if operator == "联通":
+        operator_ranges = station_id_ranges.get("联通", {}).get("5G", [])
+    elif operator == "电信":
+        operator_ranges = station_id_ranges.get("电信", {}).get("5G", [])
+    else:
+        raise ValueError(f"未知的运营商: {operator}")
+
+    # 使用表达式链构建条件
+    when_expr = None
+    for city_data in operator_ranges:
+        city = city_data["name"]
+        condition = None
+        for start, end in city_data["ranges"]:
+            if condition is None:
+                condition = pl.col(station_id_column).is_between(
+                    start, end, closed="both"
+                )
+            else:
+                condition = condition | pl.col(station_id_column).is_between(
+                    start, end, closed="both"
+                )
+
+        if when_expr is None:
+            when_expr = pl.when(condition).then(pl.lit(city))
+        else:
+            when_expr = when_expr.when(condition).then(pl.lit(city))
+
+    # 更新“地市”列
+    df = df.with_columns(
+        pl.when(when_expr is not None)
+        .then(when_expr)
+        .otherwise(pl.col("地市"))
+        .alias("地市")
+    )
+
+    return df
+
+
+def categorize_city_by_station_id_5g_telecom(
+        df: pl.DataFrame,
+        station_id_ranges: dict,
+        station_id_column: str = "基站号",
+) -> pl.DataFrame:
+    """根据电信基站号范围判断 5G 地市"""
+    if station_id_column not in df.columns:
+        raise ValueError(f"数据中缺少必要的列: {station_id_column}")
+
+    operator_ranges = station_id_ranges.get("电信", {}).get("5G", [])
+
+    # 使用表达式链构建条件
+    when_expr = None
+    for city_data in operator_ranges:
+        city = city_data["name"]
+        condition = None
+        for start, end in city_data["ranges"]:
+            if condition is None:
+                condition = pl.col(station_id_column).is_between(
+                    start, end, closed="both"
+                )
+            else:
+                condition = condition | pl.col(station_id_column).is_between(
+                    start, end, closed="both"
+                )
+
+        if when_expr is None:
+            when_expr = pl.when(condition).then(pl.lit(city))
+        else:
+            when_expr = when_expr.when(condition).then(pl.lit(city))
+
+    # 添加“电信地市”列
+    df = df.with_columns(when_expr.otherwise(pl.lit(None)).alias("电信地市"))
+
+    return df
+
+
 def categorize_city_by_station_id(
         df: pl.DataFrame,
         station_id_ranges: dict,
         operator_suffix: str,
-        mode:str,
+        mode: str,
         station_id_column: str = "基站号",
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """根据基站号范围判断地市"""
@@ -45,7 +135,7 @@ def categorize_city_by_station_id(
         operator_ranges = station_id_ranges.get("电信", {}).get(mode, [])
     else:
         raise ValueError(f"未知的运营商: {operator_suffix}")
-        
+
     # 使用表达式链构建条件
     when_expr = None
     for city_data in operator_ranges:  # 遍历数组表格
@@ -255,17 +345,22 @@ def calculate_and_fill_missing_columns(df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def save_results(file_manager: ExcelManager, results_4G: dict,df_5G:pl.DataFrame,output_file_name:str,sheet_name_4G:str,sheet_name_5G:str):
-    """保存结果到不同格式"""
-    # 保存主要统计结果为Excel
+def save_results(file_manager: ExcelManager, results_4G: dict, df_5G_Raw: pl.DataFrame, df_5G_Weekly: pl.DataFrame,
+                 output_file_name: str,
+                 sheet_name_4G: str, sheet_name_5G: str):
+    """保存 4G 和 5G 结果到同一个文件的不同 sheet，并设置百分比格式"""
+
+    # 使用 file_manager.save_multiple_sheets 保存多个 sheet
     file_manager.save_multiple_sheets(
         filename=output_file_name,
-        **{sheet_name_4G: results_4G["weekly_stats"]},
-        联通指标统计=results_4G["rsrp_stats_unicom"],
-        电信指标统计=results_4G["rsrp_stats_telecom"],
-        perf_query=results_4G["perf_query"],
-        **{sheet_name_5G: df_5G}
+        **{sheet_name_4G: results_4G["weekly_stats"],
+           "联通指标统计": results_4G["rsrp_stats_unicom"],
+           "电信指标统计": results_4G["rsrp_stats_telecom"],
+           "perf_query": results_4G["perf_query"],
+           sheet_name_5G: df_5G_Weekly,
+           "5GMR总指标": df_5G_Raw}
     )
+
 
 def parse_station_id(df: pl.DataFrame, column_name: str = "对象编号") -> pl.DataFrame:
     """
@@ -308,7 +403,7 @@ def parse_station_id(df: pl.DataFrame, column_name: str = "对象编号") -> pl.
     df_with_station_id = df_filtered.with_columns(
         pl.col(column_name).map_elements(extract_station_id, return_dtype=pl.Int64).alias("基站号")
     )
-    
+
     # 4. 删除基站号为空的行
     df_result = df_with_station_id.filter(
         pl.col("基站号").is_not_null()  # 保留基站号不为空的行
@@ -316,7 +411,9 @@ def parse_station_id(df: pl.DataFrame, column_name: str = "对象编号") -> pl.
 
     return df_result
 
-def process_cqi_data(df: pl.DataFrame, station_id_ranges: dict,mode:str, station_id_column: str = "基站号") -> pl.DataFrame:
+
+def process_cqi_data(df: pl.DataFrame, station_id_ranges: dict, mode: str,
+                     station_id_column: str = "基站号") -> pl.DataFrame:
     """
     根据基站号划分地市，并累计 CQI >=7 到 CQI 15 的数据
 
@@ -349,7 +446,7 @@ def process_cqi_data(df: pl.DataFrame, station_id_ranges: dict,mode:str, station
             when_expr = pl.when(condition).then(pl.lit(city))
         else:
             when_expr = when_expr.when(condition).then(pl.lit(city))
-            
+
     # 添加地市列
     df = df.with_columns(when_expr.otherwise(pl.lit(None)).alias("地市"))
 
@@ -377,7 +474,7 @@ def process_cqi_data(df: pl.DataFrame, station_id_ranges: dict,mode:str, station
     df = df.with_columns(
         pl.sum_horizontal(*all_cqi_columns).alias("CQI总数")
     )
-    
+
     # 按地市汇总 CQI>=7 数据 和 CQI总数
     cqi_stats = df.group_by("地市").agg(
         [
@@ -387,7 +484,8 @@ def process_cqi_data(df: pl.DataFrame, station_id_ranges: dict,mode:str, station
     )
 
     return cqi_stats
-    
+
+
 def fill_cqi_to_weekly_stats(weekly_stats: pl.DataFrame, cqi_stats: pl.DataFrame) -> pl.DataFrame:
     """
       将 CQI>=7 数据填充到 4G 周指标表中
@@ -423,7 +521,7 @@ def fill_cqi_to_weekly_stats(weekly_stats: pl.DataFrame, cqi_stats: pl.DataFrame
     weekly_stats = weekly_stats.with_columns(
         (pl.col("CQI>=7数量") / pl.col("CQI总数")).alias("CQI优良率")
     )
-    
+
     # 按地市排序
     city_order = [
         "抚州",
@@ -439,7 +537,7 @@ def fill_cqi_to_weekly_stats(weekly_stats: pl.DataFrame, cqi_stats: pl.DataFrame
         "鹰潭",
         "全省",
     ]
-    
+
     # 计算全省的 CQI>=7 数量总和、CQI 总数总和
     province_cqi_ge7_sum = weekly_stats.filter(pl.col("城市名称") != "全省")["CQI>=7数量"].sum()
     province_cqi_total_sum = weekly_stats.filter(pl.col("城市名称") != "全省")["CQI总数"].sum()
@@ -492,12 +590,13 @@ def fill_cqi_to_weekly_stats(weekly_stats: pl.DataFrame, cqi_stats: pl.DataFrame
     weekly_stats = weekly_stats.drop("city_order")
 
     return weekly_stats
-    
+
 
 if __name__ == "__main__":
     start_time = time.time()
-    results_4G = {} # 用于存储 4G 的所有结果
-    df_5g = None  # 用于存储 5G DataFrame
+    results_4G = {}  # 用于存储 4G 的所有结果
+    df_5g_raw = None  # 用于存储 5G 原始数据
+    df_5g_weekly: pl.DataFrame  # 用于存储 5G 周指标数据
     file_manager = ExcelManager(config["paths"]["working_directory"])
 
     for mode in ["4G", "5G"]:
@@ -505,7 +604,7 @@ if __name__ == "__main__":
 
         # 根据 mode 选择路径配置
         paths = config["paths"][mode]
-        
+
         network_ranges = config["network_ranges"]
         try:
             if mode == "4G":
@@ -517,7 +616,7 @@ if __name__ == "__main__":
                 df_unicom, rsrp_stats_unicom = categorize_city_by_station_id(
                     df_unicom, network_ranges, "联通自建", mode
                 )
-        
+
                 print(f"正在处理{mode}电信数据...")
                 df_telecom = read_mr_data(
                     file_manager, paths["telecom_mr_data"]
@@ -525,14 +624,14 @@ if __name__ == "__main__":
                 df_telecom, rsrp_stats_telecom = categorize_city_by_station_id(
                     df_telecom, network_ranges, "电信自建", mode
                 )
-    
+
                 print(f"正在生成{mode}周指标...")
                 weekly_stats = create_weekly_4g_stats_for_excel(
                     rsrp_stats_unicom, rsrp_stats_telecom
                 )
-    
+
                 weekly_stats = calculate_and_fill_missing_columns(weekly_stats)
-    
+
                 # 选择需要的列
                 df_unicom_save = df_unicom.select(
                     ["地市", "基站号", "MRO-RSRP≥-112采样点数", "MRO-RSRP总采样点数"]
@@ -540,14 +639,14 @@ if __name__ == "__main__":
                 df_telecom_save = df_telecom.select(
                     ["地市", "基站号", "MRO-RSRP≥-112采样点数", "MRO-RSRP总采样点数"]
                 )
-        
+
                 # 读取并解析新的CSV文件
                 print(f"正在读取并解析{mode}新的CSV文件...")
                 df_perf = file_manager.read_csv(file_name=paths["perf_query_data"], encoding="gbk")
                 df_perf = parse_station_id(df_perf, "对象编号")
-    
-                cqi_stats = process_cqi_data(df_perf,network_ranges,mode)
-    
+
+                cqi_stats = process_cqi_data(df_perf, network_ranges, mode)
+
                 # 将 CQI 数据合并到 4G 周指标表中
                 weekly_stats = fill_cqi_to_weekly_stats(weekly_stats, cqi_stats)
 
@@ -562,19 +661,118 @@ if __name__ == "__main__":
             elif mode == "5G":
                 # 5G 的处理逻辑 (只读取 5G MR 联通数据, 进行必要的处理)
                 print(f"正在处理{mode}联通数据...")
-                df_5g = read_mr_data(file_manager, paths["unicom_mr_data"])
-            
+
+                df_5g_raw = read_mr_data(file_manager, paths["unicom_mr_data"])
+
+                # 确保 df_5g 包含 "基站号" 列
+                if "基站号" not in df_5g_raw.columns:
+                    # 尝试从 "小区号" 列中提取基站号
+                    # 示例小区号：7655506_1813
+                    if "小区号" in df_5g_raw.columns:
+                        df_5g_raw = df_5g_raw.with_columns(
+                            pl.col("小区号").str.extract(r"(\d+)_\d+", 1).cast(pl.Int64).alias("基站号")
+                        )
+       
+                # 先进行联通 5G 地市划分
+                df_5g_raw = categorize_city_by_station_id_5g(df_5g_raw, network_ranges, operator="联通")
+
+                df_5g_raw = categorize_city_by_station_id_5g(
+                    df_5g_raw, network_ranges, operator="电信"
+                )
+
+                # 根据需求选择需要的列
+                df_5g_raw = df_5g_raw.select(
+                    [
+                        "地市",
+                        "基站号",
+                        "小区号",
+                        "MR总采样点数",
+                        "RSRP>=-105采样点比例",
+                        "SINR总采样点数",
+                        "SINR>=0采样点比例",  # 添加这一列
+                    ]
+                )
+                print(df_5g_raw.schema)
+
+                print(df_5g_raw.columns)
+                df_5g_weekly = df_5g_raw.clone()
+                
+                # 对df_5g_weekly根据地市进行分组
+                df_5g_weekly = df_5g_weekly.group_by("地市").agg(
+                    [
+                        pl.sum("MR总采样点数").alias("MR采样点"),
+                        (pl.col("MR总采样点数") * pl.col("RSRP>=-105采样点比例")).sum().alias("RSRP>=-105采样点"),
+                        (pl.col("MR总采样点数") * pl.col("SINR>=0采样点比例")).sum().alias("SINR>=0采样点"),
+                    ]
+                )
+
+                # 计算 "5G MR 覆盖率"
+                df_5g_weekly = df_5g_weekly.with_columns(
+                    (pl.col("RSRP>=-105采样点") / pl.col("MR采样点") * 100).alias("5G MR覆盖率")
+                )
+                # 使用 with_columns 和 format_str 方法将 "5G MR覆盖率" 列格式化为百分比，并保留指定位数的小数
+
+                df_5g_weekly = df_5g_weekly.with_columns(
+                    pl.col("5G MR覆盖率").map_elements(lambda x: "{:.2f}%".format(x), return_dtype=pl.String)
+                )
+
+                # 添加目标值列
+                df_5g_weekly = df_5g_weekly.with_columns(pl.lit("97.00%").alias("目标覆盖率"))
+
+                city_order = [
+                    "抚州",
+                    "赣州",
+                    "吉安",
+                    "景德镇",
+                    "九江",
+                    "南昌",
+                    "萍乡",
+                    "上饶",
+                    "新余",
+                    "宜春",
+                    "鹰潭",
+                ]
+                # 使用 Categorical 类型对 "地市" 列进行排序
+                df_5g_weekly = df_5g_weekly.with_columns(
+                    pl.col("地市").cast(pl.Categorical)
+                )
+                # # 添加汇总行
+                # total_row = pl.DataFrame(
+                #     {
+                #         "地市": ["汇总"],
+                #         "MR采样点": [df_5g_weekly["MR采样点"].sum()],
+                #         "RSRP>=-105采样点": [df_5g_weekly["RSRP>=-105采样点"].sum()],
+                #         "SINR>=0采样点": [df_5g_weekly["SINR>=0采样点"].sum()],
+                #         "5G MR覆盖率": ["{:.2f}%".format(
+                #             df_5g_weekly["RSRP>=-105采样点"].sum() / df_5g_weekly["MR采样点"].sum() * 100)],
+                #         "目标覆盖率": ["97.00%"],  # 添加汇总行的目标值
+                #     }
+                # )
+                summary_row = df_5g_weekly.filter(pl.col("地市") == "汇总")
+                df_5g_weekly = df_5g_weekly.filter(pl.col("地市") != "汇总")
+
+                # 对非汇总行进行排序
+                df_5g_weekly = df_5g_weekly.sort("地市", descending=False)  # 使用 sort 方法直接根据 "地市" 列排序
+
+                # 重新添加汇总行
+                df_5g_weekly = pl.concat([df_5g_weekly, summary_row])
+           
+                first_column = df_5g_weekly.select(pl.all().first()).columns
+                other_columns = [col for col in df_5g_weekly.columns if col not in first_column]
+                df_5g_weekly = df_5g_weekly.select(first_column + other_columns)
+
+
         except Exception as e:
             print(f"\n处理过程中出现错误:")
             print(f"错误类型: {type(e).__name__}")
             print(f"错误信息: {str(e)}")
-    
-    
+
     # 在循环结束后，一次性保存所有结果
     save_results(
         file_manager,
         results_4G,
-        df_5g,
+        df_5g_raw,
+        df_5g_weekly,
         config["paths"]["output_file_name"],
         config["paths"]["4G"]["output_sheet_name"],
         config["paths"]["5G"]["output_sheet_name"],
@@ -586,4 +784,3 @@ if __name__ == "__main__":
 
     print(f"\n 数据处理完成!")
     print(f"总运行时间: {formatted_time}")
-    

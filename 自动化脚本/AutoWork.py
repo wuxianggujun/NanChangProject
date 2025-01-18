@@ -1,9 +1,12 @@
+import base64
 import datetime
 import os
 import subprocess
+from tkinter import Image
 
 import psutil
 import pyperclip
+from aip import AipOcr
 from pywinauto.application import Application
 from pywinauto import Desktop, keyboard
 import time
@@ -19,6 +22,12 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.edge.options import Options  # 使用 Edge 的 Options 类
 from selenium.webdriver.edge.service import Service  # 导入 Service 类
 from selenium.webdriver.support.wait import WebDriverWait
+
+APP_ID = '117118052'
+API_KEY = 'aQg3FvvkMECsBXd0QOqxkix9'
+SECRET_KEY = '9MF110N1etGSiwwTFgWv88ZLSkuJblO9'
+
+client = AipOcr(APP_ID, API_KEY, SECRET_KEY)
 
 
 def get_gotify_message(gotify_url, client_token, timeout=180):
@@ -145,7 +154,7 @@ def find_edge_process(user_data_dir=None):
     return None
 
 
-def start_edge_with_remote_debugging(port=9222, user_data_dir=r"D:\python\seleniumEdge", timeout=30):
+def start_edge_with_remote_debugging(port=9222, user_data_dir=r"D:\python\seleniumEdge", timeout=10):
     """启动 Edge 浏览器并开启远程调试。
 
     Args:
@@ -277,19 +286,46 @@ def select_option_from_custom_dropdown(driver, dropdown_input_id, target_option_
             if attempts < retries:
                 print("尝试重启 Edge 并重试...")
                 driver.quit()  # 关闭当前的 driver
-                edge_process = start_edge_with_remote_debugging(port=9222)
-                options = Options()
-                options.add_experimental_option("debuggerAddress", "localhost:9222")
-                driver = webdriver.Edge(options=options)
-                driver.get(
-                    "http://10.188.34.1/cs/login.html?type=kickout&loginFlag=loginFlag&ip=")  # 重新加载页面
-                print("已重新加载页面")
+
+                # 重启 Edge 并获取新的 driver 对象
+                if start_edge_with_remote_debugging(port=9222):
+                    print("Edge 重启成功！")
+                    options = Options()
+                    options.add_experimental_option("debuggerAddress", "localhost:9222")
+                    driver = webdriver.Edge(options=options)  # 更新 driver 对象
+                    driver.get(
+                        "http://10.188.34.1/cs/login.html?type=kickout&loginFlag=loginFlag&ip=")  # 重新加载页面
+                    print("已重新加载页面")
+                else:
+                    print("Edge 重启失败！")
+                    break  # 如果重启失败，退出循环
 
         except Exception as e:
             print(f"在下拉框中选择 '{target_option_text}' 出错: {e}")
             break  # 其他错误直接退出循环
 
     print(f"在 {retries} 次尝试后仍然无法选择 '{target_option_text}'")
+
+
+def get_verification_code_by_baidu_ocr(image_data):
+    # 在此处添加调用百度OCR API的代码，并返回验证码结果
+    try:
+        # 调用百度 OCR API 进行识别
+        result = client.basicGeneral(image_data)  # 使用通用文字识别
+
+        # 提取识别结果
+        if result and 'words_result' in result:
+            words = [word_info['words'] for word_info in result['words_result']]
+            verification_code = ''.join(words)
+            print(f"百度 OCR 识别结果: {verification_code}")
+            return verification_code
+        else:
+            print(f"百度 OCR 识别失败: {result}")
+            return None
+
+    except Exception as e:
+        print(f"百度 OCR 识别出错: {e}")
+        return None
 
 
 if __name__ == '__main__':
@@ -302,6 +338,9 @@ if __name__ == '__main__':
         # 创建 WebDriver 对象，连接到已打开的 Edge 浏览器
         driver = webdriver.Edge(options=options)
 
+        # 设置 JavaScript 异步脚本的超时时间为 30 秒 (根据需要调整)
+        driver.set_script_timeout(30)
+
         # 访问指定 URL
         target_url = "http://10.188.34.1/cs/login.html?type=kickout&loginFlag=loginFlag&ip="
         if driver.current_url != target_url:
@@ -312,6 +351,64 @@ if __name__ == '__main__':
         element = wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
 
         select_option_from_custom_dropdown(driver, "selectTree3_input", "江西分公司")
+
+        # 获取账号和密码输入框
+        username_input = driver.find_element(By.NAME, "username")
+        password_input = driver.find_element(By.NAME, "password")
+
+        # 清空账号和密码输入框
+        username_input.clear()
+        password_input.clear()
+
+        # 填写账号和密码
+        username_input.send_keys("17507042051")  # 替换为你的实际账号
+        password_input.send_keys("KF79189090dsp")  # 替换为你的实际密码
+
+        # 获取验证码图片并识别
+        verification_img = driver.find_element(By.XPATH, "//span[@class='verification']/img")
+        img_src = verification_img.get_attribute("src")
+        print(f"验证码图片地址: {img_src}")
+
+        # 处理 blob URL
+        if img_src.startswith("blob:"):
+            # 使用 JavaScript 创建 a 标签模拟下载
+            driver.execute_script("""
+                          var link = document.createElement('a');
+                          link.href = arguments[0];
+                          link.download = 'verification_code.png';
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                      """, img_src)
+            # 等待文件下载完成，你可以根据实际情况调整等待时间
+            time.sleep(5)
+            # 验证码图片将保存在浏览器的默认下载目录中，你需要找到这个目录
+            # 这里假设下载目录是 '你的下载目录'，你需要将其替换为你的实际下载目录
+            download_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+            image_path = os.path.join(download_dir, "verification_code.png")
+
+            if os.path.exists(image_path):
+                print(f"验证码图片已下载至: {image_path}")
+                # 读取图片数据
+                with open(image_path, "rb") as f:
+                    img_data = f.read()
+                # 使用百度 OCR API 识别验证码
+                code = get_verification_code_by_baidu_ocr(img_data)
+
+                if code:
+                    verification_code_input = driver.find_element(By.NAME, "verificationCode")
+                    verification_code_input.send_keys(code)
+
+                    # 提交表单
+                    login_form = driver.find_element(By.ID, "tenantLoginForm")
+                    login_form.submit()
+                else:
+                    print("验证码识别失败，请手动处理或重试。")
+            else:
+                print(f"验证码图片下载失败，请检查下载目录：{download_dir}")
+            
+        else:
+            print("非 blob URL，请检查代码")
     else:
         print("Edge 启动失败！")
 

@@ -21,6 +21,7 @@ from selenium.webdriver.edge.options import Options  # 使用 Edge 的 Options �
 from selenium.webdriver.edge.service import Service  # 导入 Service 类
 from selenium.webdriver.support.wait import WebDriverWait
 
+
 def get_gotify_message(gotify_url, client_token, timeout=180):
     """
     从 Gotify 服务器获取最新消息，并验证消息时间。
@@ -124,22 +125,27 @@ def is_remote_debugging_port_open(port):
             driver.quit()
 
 
-def find_edge_process(user_data_dir=None):
-    """查找 Edge 进程，可以根据 user-data-dir 参数来查找特定的 Edge 实例。
+def find_edge_process(user_data_dir=None, remote_debugging_port=None):
+    """查找 Edge 进程，可以根据 user-data-dir 和 remote_debugging_port 参数来查找特定的 Edge 实例。
 
     Args:
         user_data_dir: 要查找的 Edge 实例使用的 user-data-dir 路径。
+        remote_debugging_port: 要查找的 Edge 实例的远程调试端口。
 
     Returns:
         如果找到 Edge 进程，返回该进程的 psutil.Process 对象；否则返回 None。
     """
-    for process in psutil.process_iter(['pid', 'name', 'cmdline']):
+    for process in psutil.process_iter(['pid', 'name', 'cmdline', 'status']):
         try:
             if "msedge" in process.info['name'].lower():
-                if user_data_dir:
-                    if any(user_data_dir in arg for arg in process.info['cmdline']):
-                        return process
-                else:
+                if process.info['status'] in (psutil.STATUS_RUNNING, psutil.STATUS_SLEEPING, psutil.STATUS_DISK_SLEEP):
+                    cmdline = process.info['cmdline']
+                    if user_data_dir:
+                        if not any(user_data_dir in arg for arg in cmdline):
+                            continue  # 如果指定了 user_data_dir 但进程命令行中不包含，则跳过
+                    if remote_debugging_port:
+                        if not any(f"--remote-debugging-port={remote_debugging_port}" in arg for arg in cmdline):
+                            continue  # 如果指定了 remote_debugging_port 但进程命令行中不包含，则跳过
                     return process
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             pass
@@ -175,18 +181,23 @@ def start_edge_with_remote_debugging(port=9222, user_data_dir=r"D:\python\seleni
             print(f"连接到已存在的 Edge 实例失败，端口：{port}")
 
     # 查找目标实例
-    edge_process = find_edge_process(user_data_dir)
+    edge_process = find_edge_process(user_data_dir, port)
     if edge_process:
-        print("检测到已存在的目标 Edge 进程")
+        print("检测到已存在的具有相同用户目录和远程调试端口的目标 Edge 进程")
         if is_remote_debugging_port_open(port):
             print(f"远程调试端口 {port} 已打开,尝试连接")
             return True
         else:
             print("远程调试端口未打开或无法连接，将尝试重启 Edge")
             # 杀死已存在的目标 Edge 进程
-            edge_process.terminate()
-            edge_process.wait()  # 等待进程完全终止
-            print("已关闭已存在的目标 Edge 进程")
+            try:
+                edge_process.terminate()
+                edge_process.wait()  # 等待进程完全终止
+                print("已关闭已存在的目标 Edge 进程")
+            except psutil.NoSuchProcess:
+                print("尝试终止已存在的 Edge 进程时，该进程已不存在")
+            except Exception as e:
+                print(f"终止已存在的 Edge 进程时发生错误: {e}")
 
     command = [edge_path, f"--remote-debugging-port={port}", f"--user-data-dir={user_data_dir}"]
     print(command)
@@ -241,47 +252,109 @@ if __name__ == '__main__':
         driver.set_script_timeout(30)
 
         # 访问指定 URL
-        target_url = "http://10.186.254.225:10010/mcsnr/#/orderManage/complaints/orderQueryList"
-        
+        target_url = "http://10.186.254.225:10010/portal/#/Home"
+
         if driver.current_url != target_url:
             driver.get(target_url)
             print(f"已打开页面：{target_url}")
 
-        wait = WebDriverWait(driver, 10)
-        element = wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+        # wait = WebDriverWait(driver, 10)
+        # element = wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+        # 
+        # # 获取账号和密码输入框以及登录按钮
+        # username_input = driver.find_element(By.ID, "normal_login_username")
+        # password_input = driver.find_element(By.ID, "normal_login_password")
+        # login_button = driver.find_element(By.CSS_SELECTOR, ".login-form-button")
+        # 
+        # # 清空账号和密码输入框
+        # username_input.clear()
+        # password_input.clear()
+        # 
+        # # 填写账号和密码
+        # username_input.send_keys("17507042051")
+        # password_input.send_keys("KF79189090dsp")
+        # 
+        # # 点击获取验证码按钮
+        # get_code_button = driver.find_element(By.CSS_SELECTOR, ".codeLineBth--hjFKm")
+        # get_code_button.click()
+        # print("已点击获取验证码按钮")
+        # 
+        # # 获取 Gotify 消息
+        # gotify_url = "http://wuxianggujun.com:40266"  # 替换为你的 Gotify 服务器地址
+        # client_token = "C5rHlCcPLWwLT3_"  # 替换为你的 Gotify 客户端的 token (需要创建客户端并获取 token)
+        # verification_code = get_gotify_message(gotify_url, client_token, timeout=180)
+        # 
+        # if verification_code:
+        #     # 输入验证码
+        #     verification_code_input = driver.find_element(By.CSS_SELECTOR, ".codeLine--OTnML input.ant-input")
+        #     verification_code_input.send_keys(verification_code)
+        #     print(f"已输入验证码: {verification_code}")
+        # 
+        #     # 点击登录按钮
+        #     login_button.click()
+        #     print("已点击登录按钮")
 
-        # 获取账号和密码输入框以及登录按钮
-        username_input = driver.find_element(By.ID, "normal_login_username")
-        password_input = driver.find_element(By.ID, "normal_login_password")
-        login_button = driver.find_element(By.CSS_SELECTOR, ".login-form-button")
+        # 等待登录后的页面加载
+        try:
+            # 等待 "scroll" 元素加载
+            WebDriverWait(driver, 20).until(
+                EC.presence_of_element_located((By.ID, "scroll"))
+            )
+            print("已成功登录")
+        except TimeoutException:
+            print("登录失败或等待超时")
+            driver.quit()
+            exit()
 
-        # 清空账号和密码输入框
-        username_input.clear()
-        password_input.clear()
+        # 查找并点击 "移网投诉" 图标
+        try:
+            scroll_container = driver.find_element(By.ID, "scroll")
 
-        # 填写账号和密码
-        username_input.send_keys("17507042051") 
-        password_input.send_keys("KF79189090dsp")
+            # 使用 JavaScript 将 "移网投诉" 图标滚动到视图中
+            # 定位 "移网投诉" 元素
+            # complaint_element = driver.find_element(By.XPATH, "//li[@title='移网投诉']") # 第一个方案
+            # 等待 "移网投诉" 对应的 li 元素出现 (方案二选一)
+            # WebDriverWait(driver, 10).until(
+            #     EC.presence_of_element_located((By.XPATH, "//li[@title='移网投诉']"))
+            # )
+            # WebDriverWait(driver, 10).until(
+            #     EC.presence_of_element_located((By.XPATH, "//li[.//img[contains(@src, '/portal/res/images/icon_mcs.png')]]"))
+            # )
 
-        # 点击获取验证码按钮
-        get_code_button = driver.find_element(By.CSS_SELECTOR, ".codeLineBth--hjFKm")
-        get_code_button.click()
-        print("已点击获取验证码按钮")
+            # complaint_element = driver.find_element(By.XPATH, "//li[@title='移网投诉']") # 第一个方案
+            complaint_element = driver.find_element(By.XPATH,
+                                                    "//li[.//img[contains(@src, '/portal/res/images/icon_mcs.png')]]")  # 第二个方案
 
-        # 获取 Gotify 消息
-        gotify_url = "http://wuxianggujun.com:40266"  # 替换为你的 Gotify 服务器地址
-        client_token = "C5rHlCcPLWwLT3_"  # 替换为你的 Gotify 客户端的 token (需要创建客户端并获取 token)
-        verification_code = get_gotify_message(gotify_url, client_token, timeout=180)
+            # 使用 JavaScript 将元素滚动到视图中央
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});",
+                                  complaint_element)
 
-        if verification_code:
-            # 输入验证码
-            verification_code_input = driver.find_element(By.CSS_SELECTOR, ".codeLine--OTnML input.ant-input")
-            verification_code_input.send_keys(verification_code)
-            print(f"已输入验证码: {verification_code}")
+            # 等待元素可见
+            WebDriverWait(driver, 20).until(EC.visibility_of(complaint_element))
+            # 只有当元素可见时才点击它
+            if complaint_element.is_displayed():
+                complaint_element.click()
+                print("已点击 '移网投诉' 图标")
+            else:
+                print("'移网投诉' 图标不可见，无法点击")
 
-            # 点击登录按钮
-            login_button.click()
-            print("已点击登录按钮")
+        except TimeoutException:
+            print("未找到 '移网投诉' 图标或点击失败")
+            driver.quit()
+            exit()
+
+        # 等待新页面加载完成 (根据实际情况修改等待条件)
+        try:
+            WebDriverWait(driver, 20).until(
+                EC.url_contains("/mcs")  # 假设新页面的 URL 包含 "/mcs"
+            )
+            print("已成功跳转到新页面")
+        except TimeoutException:
+            print("跳转到新页面失败或等待超时")
+            driver.quit()
+            exit()
+
+
         else:
             print("未获取到验证码或验证码已过期")
 

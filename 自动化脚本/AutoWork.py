@@ -2,6 +2,7 @@ import base64
 import datetime
 import json
 import os
+import socket
 import subprocess
 import psutil
 import pyperclip
@@ -20,6 +21,53 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.edge.options import Options  # 使用 Edge 的 Options 类
 from selenium.webdriver.edge.service import Service  # 导入 Service 类
 from selenium.webdriver.support.wait import WebDriverWait
+
+# 全局变量，控制是否启用代理服务器
+USE_PROXY = False  # 设置为 True 启用代理，设置为 False 禁用代理
+PROXY_PORT = 8080
+MITMPROXY_SCRIPT = r"C:\Users\wuxianggujun\CodeSpace\PycharmProjects\NanChangProject\proxy_script.py"  # mitmproxy 脚本路径
+LOCAL_JS_FILE = r"C:\Users\wuxianggujun\CodeSpace\PycharmProjects\NanChangProject\客户服务支撑系统\7547.bb67afff.chunk.js"  # 本地 
+
+
+def start_mitmproxy():
+    """启动 mitmproxy 代理服务器。"""
+    mitmdump_path = r"C:\Users\wuxianggujun\AppData\Roaming\Python\Python313\Scripts\mitmdump.exe"  # 替换为 mitmdump 的绝对路径
+    command = [
+        mitmdump_path,
+        "-s", MITMPROXY_SCRIPT,
+        "-p", str(PROXY_PORT)
+    ]
+    try:
+        # 检查端口是否被占用
+        if is_port_in_use(PROXY_PORT):
+            print(f"端口 {PROXY_PORT} 已被占用，请先关闭占用该端口的进程。")
+            return None
+
+        process = subprocess.Popen(command)
+        print(f"mitmproxy 已启动，监听端口：{PROXY_PORT}")
+        return process
+    except Exception as e:
+        print(f"启动 mitmproxy 失败: {e}")
+        return None
+
+
+def is_port_in_use(port):
+    """检查端口是否被占用。"""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('localhost', port)) == 0
+
+
+def stop_process_by_pid(pid):
+    """根据 PID 终止进程。"""
+    try:
+        process = psutil.Process(pid)
+        process.terminate()
+        process.wait()
+        print(f"已终止进程，PID: {pid}")
+    except psutil.NoSuchProcess:
+        print(f"未找到进程，PID: {pid}")
+    except Exception as e:
+        print(f"终止进程时发生错误，PID: {pid}: {e}")
 
 
 def get_gotify_message(gotify_url, client_token, timeout=180):
@@ -199,9 +247,18 @@ def start_edge_with_remote_debugging(port=9222, user_data_dir=r"D:\python\seleni
             except Exception as e:
                 print(f"终止已存在的 Edge 进程时发生错误: {e}")
 
-    command = [edge_path, f"--remote-debugging-port={port}", f"--user-data-dir={user_data_dir}"]
-    print(command)
+    command = [
+        edge_path,
+        f"--remote-debugging-port={port}",
+        f"--user-data-dir={user_data_dir}"
+            ]
+    
+    # 只有当 USE_PROXY 为 True 时才添加代理配置
+    if USE_PROXY:
+        command.append(f"--proxy-server=http://localhost:{PROXY_PORT}")
 
+    print(command)
+    
     try:
         process = subprocess.Popen(command)
         print(f"已启动 Edge，远程调试端口: {port}")
@@ -239,6 +296,14 @@ def find_edge_path():
 
 
 if __name__ == '__main__':
+    # 启动 mitmproxy (如果需要)
+    if USE_PROXY:
+        mitmproxy_process = start_mitmproxy()
+        if mitmproxy_process is None:
+            exit()  # 如果 mitmproxy 启动失败，则退出
+    else:
+        mitmproxy_process = None
+        
     # 启动带有远程调试端口的Edge浏览器
     if start_edge_with_remote_debugging(port=9222):
         print("Edge 启动成功！")
@@ -354,12 +419,17 @@ if __name__ == '__main__':
             driver.quit()
             exit()
 
-
+        # if mitmproxy_process:
+        #     stop_process_by_pid(mitmproxy_process.pid)
+            
         else:
             print("未获取到验证码或验证码已过期")
 
     else:
         print("Edge 启动失败！")
+        # 如果 Edge 启动失败，也要关闭 mitmproxy 进程
+        if mitmproxy_process:
+            stop_process_by_pid(mitmproxy_process.pid)
 
 # if __name__ == '__main__':
 # 

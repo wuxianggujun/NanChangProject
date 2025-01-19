@@ -1,5 +1,6 @@
 import base64
 import datetime
+import json
 import os
 import subprocess
 from tkinter import Image
@@ -369,49 +370,101 @@ if __name__ == '__main__':
         img_src = verification_img.get_attribute("src")
         print(f"验证码图片地址: {img_src}")
 
-        # 处理 blob URL
-        if img_src.startswith("blob:"):
-            # 使用 JavaScript 创建 a 标签模拟下载
-            driver.execute_script("""
-                          var link = document.createElement('a');
-                          link.href = arguments[0];
-                          link.download = 'verification_code.png';
-                          document.body.appendChild(link);
-                          link.click();
-                          document.body.removeChild(link);
-                      """, img_src)
-            # 等待文件下载完成，你可以根据实际情况调整等待时间
-            time.sleep(5)
-            # 验证码图片将保存在浏览器的默认下载目录中，你需要找到这个目录
-            # 这里假设下载目录是 '你的下载目录'，你需要将其替换为你的实际下载目录
-            download_dir = os.path.join(os.path.expanduser("~"), "Downloads")
-            image_path = os.path.join(download_dir, "verification_code.png")
+        # JavaScript 代码，用于注入和拦截 blob
+        blob_hook_script = """
+               (function() {
+                   console.log("注入脚本开始执行");
+                   const originalCreateObjectURL = URL.createObjectURL;
 
-            if os.path.exists(image_path):
-                print(f"验证码图片已下载至: {image_path}")
-                # 读取图片数据
-                with open(image_path, "rb") as f:
-                    img_data = f.read()
-                # 使用百度 OCR API 识别验证码
-                code = get_verification_code_by_baidu_ocr(img_data)
+                   URL.createObjectURL = function(blob) {
+                       console.log("createObjectURL 被调用");
+                       const blobUrl = originalCreateObjectURL.call(URL, blob);
+                       const xhr = new XMLHttpRequest();
+                       xhr.open('GET', blobUrl, true);
+                       xhr.responseType = 'blob';
 
-                if code:
-                    verification_code_input = driver.find_element(By.NAME, "verificationCode")
-                    verification_code_input.send_keys(code)
+                       xhr.onload = function() {
+                           console.log("XHR onload 触发, status:", this.status);
+                           if (this.status === 200) {
+                               const reader = new FileReader();
+                               reader.readAsDataURL(this.response);
+                               reader.onloadend = function() {
+                                   const base64data = reader.result;
+                                   console.log('Blob URL:', blobUrl, 'Base64 Data:', base64data.substring(0, 100) + "..."); // 打印部分 base64 数据
+                                   // 直接将 base64 数据赋值给 window.b64Data
+                                   window.b64Data = base64data;
+                               };
+                           } else {
+                               console.error("XHR 请求失败, status:", this.status);
+                           }
+                       };
+                       xhr.onerror = function() {
+                           console.error("XHR 请求错误");
+                       };
+                       xhr.send();
+                       return blobUrl;
+                   };
+               })();
+               """
 
-                    # 提交表单
-                    login_form = driver.find_element(By.ID, "tenantLoginForm")
-                    login_form.submit()
-                else:
-                    print("验证码识别失败，请手动处理或重试。")
+        # 等待页面加载完成后注入 JavaScript 代码
+        time.sleep(2)  # 确保页面已加载完成
+        driver.execute_script(blob_hook_script)
+        print("已注入 JavaScript 代码")
+
+        # 刷新验证码图片以触发 blob URL 的创建
+        refresh_button = driver.find_element(By.XPATH, "//div[@id='verficationbox']/div/a[@class='changnexbtn']")
+        refresh_button.click()
+        print("已点击刷新验证码")
+
+        # 等待 JavaScript 代码执行并将 base64 数据存储到 window.b64Data
+        try:
+            WebDriverWait(driver, 10).until(
+                lambda driver: driver.execute_script("return window.b64Data !== undefined;")
+            )
+            print("已成功获取到 window.b64Data")
+        except TimeoutException:
+            print("获取 window.b64Data 超时")
+
+        # 从 window.b64Data 获取 base64 数据
+        img_base64 = driver.execute_script("return window.b64Data;")
+
+        # 检查浏览器控制台错误
+        for entry in driver.get_log('browser'):
+            print(f"注入JavaScript后浏览器控制台日志: {entry}")
+
+        # 检查是否成功获取到 base64 数据
+        if img_base64:
+            print(f"获取到base64编码的图片: {img_base64[:100]}...")  # 打印部分 base64 数据
+            # 去除 Base64 编码前缀 (data:image/png;base64,)
+            img_base64 = img_base64.split(",")[1]
+            # 解码 Base64 数据
+            img_data = base64.b64decode(img_base64)
+            # 将图片数据保存到本地
+            image_path = "verification_code.png"  # 保存路径
+            with open(image_path, "wb") as f:
+                f.write(img_data)
+            print(f"验证码图片已保存至: {image_path}")
+
+            # 使用百度 OCR API 识别验证码
+            code = get_verification_code_by_baidu_ocr(img_data)
+
+            if code:
+                verification_code_input = driver.find_element(By.NAME, "verificationCode")
+                verification_code_input.send_keys(code)
+
+                # 提交表单
+                login_form = driver.find_element(By.ID, "tenantLoginForm")
+                login_form.submit()
             else:
-                print(f"验证码图片下载失败，请检查下载目录：{download_dir}")
-            
+                print("验证码识别失败，请手动处理或重试。")
         else:
-            print("非 blob URL，请检查代码")
+            print("获取验证码图片数据失败！")
+
     else:
         print("Edge 启动失败！")
-
+        
+        
 # if __name__ == '__main__':
 # 
 #     # 获取 Gotify 消息

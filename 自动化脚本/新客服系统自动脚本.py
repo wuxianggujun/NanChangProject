@@ -3,8 +3,11 @@ import datetime
 import json
 import os
 import subprocess
+from tkinter import Image
+
 import psutil
 import pyperclip
+from aip import AipOcr
 from pywinauto.application import Application
 from pywinauto import Desktop, keyboard
 import time
@@ -20,6 +23,13 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.edge.options import Options  # 使用 Edge 的 Options 类
 from selenium.webdriver.edge.service import Service  # 导入 Service 类
 from selenium.webdriver.support.wait import WebDriverWait
+
+APP_ID = '117118052'
+API_KEY = 'aQg3FvvkMECsBXd0QOqxkix9'
+SECRET_KEY = '9MF110N1etGSiwwTFgWv88ZLSkuJblO9'
+
+client = AipOcr(APP_ID, API_KEY, SECRET_KEY)
+
 
 def get_gotify_message(gotify_url, client_token, timeout=180):
     """
@@ -67,8 +77,7 @@ def get_gotify_message(gotify_url, client_token, timeout=180):
                         if line.startswith("接收时间:"):
                             receive_time_str = line.split("接收时间:")[1].strip()
                         elif line.startswith("短信内容:"):
-                            # 修改正则表达式以匹配新的短信内容格式
-                            match = re.search(r"登录动态验证码：(\d{6})", line)
+                            match = re.search(r"验证码(\d{6})", line)
                             if match:
                                 verification_code = match.group(1)
 
@@ -81,7 +90,7 @@ def get_gotify_message(gotify_url, client_token, timeout=180):
                             receive_time_timestamp = int(time.mktime(receive_time.timetuple()))
                             # 检查消息时间是否在有效范围内 (例如，2 分钟内)
                             time_diff = time.time() - receive_time_timestamp
-                            if 0 <= time_diff <= 600:
+                            if 0 <= time_diff <= 120:
                                 print(f"获取到验证码: {verification_code}, 接收时间: {receive_time_str}")
                                 return verification_code
                             else:
@@ -227,6 +236,99 @@ def find_edge_path():
     return None
 
 
+def select_option_from_custom_dropdown(driver, dropdown_input_id, target_option_text, timeout=30, retries=3):
+    """
+      在自定义下拉框中选择指定的选项。
+
+      Args:
+          driver: WebDriver 对象。
+          dropdown_input_id: 下拉框输入框的 ID (例如 "selectTree3_input")。
+          target_option_text: 要选择的选项的文本内容 (例如 "江西分公司")。
+          timeout: 等待超时时间 (秒)。
+          retries: 重试次数。
+      """
+    attempts = 0
+    while attempts < retries:
+        attempts += 1
+        try:
+            # 等待下拉框输入框加载完成
+            dropdown_input = WebDriverWait(driver, timeout).until(
+                EC.element_to_be_clickable((By.ID, dropdown_input_id)))
+
+            # 点击下拉框输入框以打开下拉框
+            dropdown_input.click()
+            print("已点击下拉输入框")
+
+            # 使用 JavaScript 来获取下拉框的容器
+            js_script = f"return document.getElementById('{dropdown_input_id}').parentNode.nextElementSibling;"
+            dropdown_container = driver.execute_script(js_script)
+
+            # 等待下拉框展开 (根据实际情况调整等待条件)
+            WebDriverWait(driver, timeout).until(
+                EC.visibility_of(dropdown_container)
+            )
+            print("下拉框已展开")
+
+            # 构建目标选项的 XPath
+            option_xpath = f"//ul/li/a/span[contains(text(), '{target_option_text}')]"
+
+            # 等待目标选项出现并可点击
+            target_option = WebDriverWait(driver, timeout).until(
+                EC.element_to_be_clickable((By.XPATH, option_xpath))
+            )
+
+            # 点击目标选项
+            target_option.click()
+            print(f"已选择: {target_option_text}")
+            return  # 成功选择后直接返回
+
+        except TimeoutException:
+            print(f"在下拉框中选择 '{target_option_text}' 超时 (第 {attempts} 次尝试)")
+            if attempts < retries:
+                print("尝试重启 Edge 并重试...")
+                driver.quit()  # 关闭当前的 driver
+
+                # 重启 Edge 并获取新的 driver 对象
+                if start_edge_with_remote_debugging(port=9222):
+                    print("Edge 重启成功！")
+                    options = Options()
+                    options.add_experimental_option("debuggerAddress", "localhost:9222")
+                    driver = webdriver.Edge(options=options)  # 更新 driver 对象
+                    driver.get(
+                        "http://10.188.34.1/cs/login.html?type=kickout&loginFlag=loginFlag&ip=")  # 重新加载页面
+                    print("已重新加载页面")
+                else:
+                    print("Edge 重启失败！")
+                    break  # 如果重启失败，退出循环
+
+        except Exception as e:
+            print(f"在下拉框中选择 '{target_option_text}' 出错: {e}")
+            break  # 其他错误直接退出循环
+
+    print(f"在 {retries} 次尝试后仍然无法选择 '{target_option_text}'")
+
+
+def get_verification_code_by_baidu_ocr(image_data):
+    # 在此处添加调用百度OCR API的代码，并返回验证码结果
+    try:
+        # 调用百度 OCR API 进行识别
+        result = client.basicGeneral(image_data)  # 使用通用文字识别
+
+        # 提取识别结果
+        if result and 'words_result' in result:
+            words = [word_info['words'] for word_info in result['words_result']]
+            verification_code = ''.join(words)
+            print(f"百度 OCR 识别结果: {verification_code}")
+            return verification_code
+        else:
+            print(f"百度 OCR 识别失败: {result}")
+            return None
+
+    except Exception as e:
+        print(f"百度 OCR 识别出错: {e}")
+        return None
+
+
 if __name__ == '__main__':
     # 启动带有远程调试端口的Edge浏览器
     if start_edge_with_remote_debugging(port=9222):
@@ -241,7 +343,7 @@ if __name__ == '__main__':
         driver.set_script_timeout(30)
 
         # 访问指定 URL
-        target_url = "http://10.186.254.225:10010/mcsnr/#/orderManage/complaints/orderQueryList"
+        target_url = "http://10.188.34.1/cs/login.html?type=kickout&loginFlag=loginFlag&ip="
         
         if driver.current_url != target_url:
             driver.get(target_url)
@@ -250,40 +352,119 @@ if __name__ == '__main__':
         wait = WebDriverWait(driver, 10)
         element = wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
 
-        # 获取账号和密码输入框以及登录按钮
-        username_input = driver.find_element(By.ID, "normal_login_username")
-        password_input = driver.find_element(By.ID, "normal_login_password")
-        login_button = driver.find_element(By.CSS_SELECTOR, ".login-form-button")
+        select_option_from_custom_dropdown(driver, "selectTree3_input", "江西分公司")
+
+        # 获取账号和密码输入框
+        username_input = driver.find_element(By.NAME, "username")
+        password_input = driver.find_element(By.NAME, "password")
 
         # 清空账号和密码输入框
         username_input.clear()
         password_input.clear()
 
         # 填写账号和密码
-        username_input.send_keys("17507042051") 
-        password_input.send_keys("KF79189090dsp")
+        username_input.send_keys("17507042051")  # 替换为你的实际账号
+        password_input.send_keys("KF79189090dsp")  # 替换为你的实际密码
 
-        # 点击获取验证码按钮
-        get_code_button = driver.find_element(By.CSS_SELECTOR, ".codeLineBth--hjFKm")
-        get_code_button.click()
-        print("已点击获取验证码按钮")
+        # 获取验证码图片并识别
+        verification_img = driver.find_element(By.XPATH, "//span[@class='verification']/img")
+        img_src = verification_img.get_attribute("src")
+        print(f"验证码图片地址: {img_src}")
 
-        # 获取 Gotify 消息
-        gotify_url = "http://wuxianggujun.com:40266"  # 替换为你的 Gotify 服务器地址
-        client_token = "C5rHlCcPLWwLT3_"  # 替换为你的 Gotify 客户端的 token (需要创建客户端并获取 token)
-        verification_code = get_gotify_message(gotify_url, client_token, timeout=180)
+        # JavaScript 代码，用于注入和拦截 blob
+        blob_hook_script = """
+              (function() {
+    console.log("注入脚本开始执行");
+    const originalCreateObjectURL = URL.createObjectURL;
 
-        if verification_code:
-            # 输入验证码
-            verification_code_input = driver.find_element(By.CSS_SELECTOR, ".codeLine--OTnML input.ant-input")
-            verification_code_input.send_keys(verification_code)
-            print(f"已输入验证码: {verification_code}")
+    URL.createObjectURL = function(blob) {
+        console.log("createObjectURL 被调用");
+        const blobUrl = originalCreateObjectURL.call(URL, blob);
+        const xhr = new XMLHttpRequest();
+        xhr.open('GET', blobUrl, true);
+        xhr.responseType = 'blob';
 
-            # 点击登录按钮
-            login_button.click()
-            print("已点击登录按钮")
+        xhr.onload = function() {
+            console.log("XHR onload 触发, status:", this.status);
+            if (this.status === 200) {
+                const reader = new FileReader();
+                reader.readAsDataURL(this.response);
+                reader.onloadend = function() {
+                    const base64data = reader.result;
+                    console.log('Blob URL:', blobUrl, 'Base64 Data:', base64data.substring(0, 100) + "..."); // 打印部分 base64 数据
+                    // 直接将 base64 数据赋值给 window.b64Data
+                    window.b64Data = base64data;
+                };
+            } else {
+                console.error("XHR 请求失败, status:", this.status);
+            }
+        };
+        xhr.onerror = function() {
+            console.error("XHR 请求错误");
+        };
+        try {
+            xhr.send();
+        } catch (e) {
+            console.error("捕获到异常:", e);
+        }
+        return blobUrl;
+    };
+})();
+               """
+
+        # 等待页面加载完成后注入 JavaScript 代码
+        time.sleep(2)  # 确保页面已加载完成
+        driver.execute_script(blob_hook_script)
+        print("已注入 JavaScript 代码")
+
+        # 刷新验证码图片以触发 blob URL 的创建
+        refresh_button = driver.find_element(By.XPATH, "//div[@id='verficationbox']/div/a[@class='changnexbtn']")
+        refresh_button.click()
+        print("已点击刷新验证码")
+
+        # 等待 JavaScript 代码执行并将 base64 数据存储到 window.b64Data
+        try:
+            WebDriverWait(driver, 10).until(
+                lambda driver: driver.execute_script("return window.b64Data !== undefined;")
+            )
+            print("已成功获取到 window.b64Data")
+        except TimeoutException:
+            print("获取 window.b64Data 超时")
+
+        # 从 window.b64Data 获取 base64 数据
+        img_base64 = driver.execute_script("return window.b64Data;")
+
+        # 检查浏览器控制台错误
+        for entry in driver.get_log('browser'):
+            print(f"注入JavaScript后浏览器控制台日志: {entry}")
+
+        # 检查是否成功获取到 base64 数据
+        if img_base64:
+            print(f"获取到base64编码的图片: {img_base64[:100]}...")  # 打印部分 base64 数据
+            # 去除 Base64 编码前缀 (data:image/png;base64,)
+            img_base64 = img_base64.split(",")[1]
+            # 解码 Base64 数据
+            img_data = base64.b64decode(img_base64)
+            # 将图片数据保存到本地
+            image_path = "verification_code.png"  # 保存路径
+            with open(image_path, "wb") as f:
+                f.write(img_data)
+            print(f"验证码图片已保存至: {image_path}")
+
+            # 使用百度 OCR API 识别验证码
+            code = get_verification_code_by_baidu_ocr(img_data)
+
+            if code:
+                verification_code_input = driver.find_element(By.NAME, "verificationCode")
+                verification_code_input.send_keys(code)
+
+                # 提交表单
+                login_form = driver.find_element(By.ID, "tenantLoginForm")
+                login_form.submit()
+            else:
+                print("验证码识别失败，请手动处理或重试。")
         else:
-            print("未获取到验证码或验证码已过期")
+            print("获取验证码图片数据失败！")
 
     else:
         print("Edge 启动失败！")

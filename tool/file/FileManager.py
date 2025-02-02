@@ -4,7 +4,7 @@ import re
 import logging
 import polars as pl
 import datetime as dt
-from typing import AnyStr, List, Tuple
+from typing import AnyStr, List, Tuple, Dict, Union
 from tqdm import tqdm
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font,Alignment

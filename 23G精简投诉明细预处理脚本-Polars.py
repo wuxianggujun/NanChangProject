@@ -118,7 +118,7 @@ if __name__ == '__main__':
             logging.info("如果本周一，记得修改days参数为3天否则默认为1，表示前一天的数据。")
     
             print(excel_data.columns)
-            processed_df = process_excel(excel_data, days=3)
+            processed_df = process_excel(excel_data, days=1)
             
             # processed_df =  remove_repeat_columns(processed_df)
             

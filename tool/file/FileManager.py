@@ -7,7 +7,7 @@ import datetime as dt
 from typing import AnyStr, List, Tuple, Dict, Union
 from tqdm import tqdm
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Font,Alignment
+from openpyxl.styles import Font,Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 import concurrent.futures
 
@@ -80,19 +80,35 @@ class FileManager:
             # 调试信息
             logging.info(f"正在保存数据，形状: {df.shape}")
         
-            # 1. 写入列名
-            for col_idx, col_name in enumerate(df.columns, 1):
-
-                # 去除列名中的后缀（如 网络类型_1 -> 网络类型）
-                cleaned_col_name = re.sub(r"_\d+$", "", col_name)
-                worksheet.cell(row=1, column=col_idx, value=cleaned_col_name)
+            # 设置样式
+            thin_border = Border(
+                left=Side(style='thin'),
+                right=Side(style='thin'),
+                top=Side(style='thin'),
+                bottom=Side(style='thin')
+            )
+            center_alignment = Alignment(horizontal='center', vertical='center')
         
-            # 2. 写入数据 - 使用 df.rows() 直接获取数据
-            for row_idx, row in enumerate(df.rows(), 1):  # 从1开始，因为第一行是列名
+            # 1. 写入列名并设置格式
+            for col_idx, col_name in enumerate(df.columns, 1):
+                # 去除列名中的后缀
+                cleaned_col_name = re.sub(r"_\d+$", "", col_name)
+                cell = worksheet.cell(row=1, column=col_idx, value=cleaned_col_name)
+                # 设置格式
+                cell.border = thin_border
+                cell.alignment = center_alignment
+        
+            # 2. 写入数据并设置格式
+            for row_idx, row in enumerate(df.rows(), 1):
                 for col_idx, value in enumerate(row, 1):
-          
                     cell = worksheet.cell(row=row_idx+1, column=col_idx)
+                    # 处理日期时间格式
+                    if isinstance(value, dt.datetime):
+                        value = value.strftime("%Y-%m-%d %H:%M:%S")
                     cell.value = value
+                    # 设置格式
+                    cell.border = thin_border
+                    cell.alignment = center_alignment
 
         except Exception as e:
             logging.error(f"保存数据到工作表时出错: {str(e)}")

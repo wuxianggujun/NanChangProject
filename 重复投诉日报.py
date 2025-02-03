@@ -6,6 +6,8 @@ from tool.file import FileManager
 from tool.formatter import ExcelFormatter
 import os
 from openai import OpenAI  # 用于调用DeepSeek API
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Alignment, Border, Side
 
 
 def generate_repeat_complaints_table(dataframe: pl.DataFrame) -> pl.DataFrame:
@@ -176,7 +178,7 @@ def process_excel(df: pl.DataFrame) -> tuple:
                 "今天重复投诉解决情况": [0],
                 "累计重复投诉解决率": [None]
             })
-            return dataframe, pl.DataFrame(), pl.DataFrame({"投诉信息": ["无重复投诉数据"]}), empty_stats
+            return dataframe, pl.DataFrame(), pl.DataFrame({"投诉信息": ["无重复投诉数据"]}), empty_stats, None, None
 
         result_list = []
 
@@ -277,7 +279,41 @@ def process_excel(df: pl.DataFrame) -> tuple:
 
         stats_df = generate_repeat_complaints_table(result_df)
 
-        return dataframe, result_df, text_df, stats_df
+        # 在返回结果前，添加重复投诉总表的数据处理
+        repeat_total_df = None
+        repeat_sheet_df = None  # 用于保存到sheet的数据
+        if len(filtered_repeat_df) > 0:
+            # 获取当前日期相关信息
+            today = dt.datetime.now()
+            date_str = today.strftime("%Y%m%d")
+            month_str = f"{today.month}月"
+            
+            # 准备重复投诉总表数据
+            repeat_total_df = filtered_repeat_df.clone()  # 克隆原始数据
+            repeat_sheet_df = filtered_repeat_df.clone()  # 克隆用于sheet的数据
+            
+            # 先添加新列
+            repeat_total_df = repeat_total_df.with_columns([
+                pl.col("区域-受理号码").alias("重复投诉号码"),
+                pl.lit(date_str).alias("日期"),
+                pl.lit(month_str).alias("月份")
+            ])
+            
+            repeat_sheet_df = repeat_sheet_df.with_columns([
+                pl.col("区域-受理号码").alias("重复投诉号码"),
+                pl.lit(date_str).alias("日期"),
+                pl.lit(month_str).alias("月份")
+            ])
+            
+            # 重新排列列的顺序，确保三列在最后并按正确顺序排列
+            original_cols = [col for col in repeat_total_df.columns if col not in ["重复投诉号码", "日期", "月份"]]
+            new_cols = ["重复投诉号码", "日期", "月份"]
+            
+            repeat_total_df = repeat_total_df.select(original_cols + new_cols)
+            repeat_sheet_df = repeat_sheet_df.select(original_cols + new_cols)
+
+        # 返回所有处理后的数据，包括新增的sheet数据
+        return dataframe, result_df, text_df, stats_df, repeat_total_df, repeat_sheet_df
 
     except Exception as e:
         logging.error(f"数据处理失败: {str(e)}")
@@ -291,7 +327,71 @@ def process_excel(df: pl.DataFrame) -> tuple:
             "今天重复投诉解决情况": [0],
             "累计重复投诉解决率": [None]
         })
-        return df, pl.DataFrame(), pl.DataFrame({"投诉信息": ["处理失败"]}), empty_stats
+        return df, pl.DataFrame(), pl.DataFrame({"投诉信息": ["处理失败"]}), empty_stats, None, None
+
+
+def export_repeat_complaints_to_excel(repeat_total_df: pl.DataFrame, file_manager: FileManager):
+    """
+    导出重复投诉数据到指定目录的Excel文件中
+    """
+    try:
+        if repeat_total_df is None or len(repeat_total_df) == 0:
+            logging.info("没有重复投诉数据需要导出")
+            return
+
+        # 创建重复投诉总表目录
+        total_complaints_dir = os.path.join(file_manager.base_dir, "重复投诉日报总表")
+        os.makedirs(total_complaints_dir, exist_ok=True)
+        
+        # 文件路径
+        file_path = os.path.join(total_complaints_dir, "重复投诉总表.xlsx")
+        
+        # 打开现有文件
+        if not os.path.exists(file_path):
+            logging.error(f"重复投诉总表文件不存在: {file_path}")
+            return
+            
+        workbook = load_workbook(file_path)
+        sheet = workbook.active if "重复投诉总表数据" not in workbook.sheetnames else workbook["重复投诉总表数据"]
+        
+        # 检查是否已有当天的数据
+        date_str = repeat_total_df["日期"][0]
+        for row_idx in range(2, sheet.max_row + 1):
+            if str(sheet.cell(row=row_idx, column=2).value) == date_str:
+                logging.info(f"已存在{date_str}的数据，不再添加")
+                return
+        
+        # 获取最后一行的位置
+        start_row = sheet.max_row + 1
+
+        # 设置样式
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+        center_alignment = Alignment(horizontal='center', vertical='center')
+
+        # 写入数据
+        for row in repeat_total_df.iter_rows(named=True):
+            current_col = 1
+            for col_name in repeat_total_df.columns:
+                value = row[col_name]
+                if isinstance(value, dt.datetime):
+                    value = value.strftime("%Y-%m-%d %H:%M:%S")
+                cell = sheet.cell(row=start_row, column=current_col, value=value)
+                cell.border = thin_border
+                cell.alignment = center_alignment
+                current_col += 1
+            start_row += 1
+
+        # 保存文件
+        workbook.save(file_path)
+        logging.info(f"重复投诉数据已追加到文件: {file_path}")
+        
+    except Exception as e:
+        logging.error(f"导出重复投诉数据失败: {str(e)}")
 
 
 if __name__ == '__main__':
@@ -308,12 +408,18 @@ if __name__ == '__main__':
         exit(1)
 
     # 处理数据并获取结果
-    processed_df, result_df, text_df, stats_df = process_excel(df)
+    processed_df, result_df, text_df, stats_df, repeat_total_df, repeat_sheet_df = process_excel(df)
 
-    file_manager.save_to_sheet("重复投诉日报", formatter=ExcelFormatter,  # 传入格式化器类
-                               原始数据=processed_df, 重复投诉结果=result_df,
-                               重复投诉文本=text_df, 重复投诉统计=stats_df)
+    # 保存原有的sheet，并添加新的重复投诉总表sheet
+    file_manager.save_to_sheet("重复投诉日报", formatter=ExcelFormatter,
+                              原始数据=processed_df, 
+                              重复投诉结果=result_df,
+                              重复投诉文本=text_df, 
+                              重复投诉统计=stats_df,
+                              重复投诉日报总表=repeat_sheet_df)  # 添加新的sheet
 
+    # 导出重复投诉数据到单独的文件
+    export_repeat_complaints_to_excel(repeat_total_df, file_manager)
 
     end_time = dt.datetime.now()
     runtime = end_time - start_time

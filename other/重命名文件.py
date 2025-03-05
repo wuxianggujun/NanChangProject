@@ -43,5 +43,5 @@ def rename_files_by_modified_date(directory):
 # 使用示例
 if __name__ == "__main__":
     # 在这里指定要处理的目录路径
-    target_directory = r"C:\Users\wuxianggujun\CodeSpace\PycharmProjects\NanChangProject\WorkDocument\23G精简投诉明细预处理脚本\source"
+    target_directory = r"C:\Users\wuxianggujun\CodeSpace\PycharmProjects\NanChangProject\WorkDocument\重复投诉日报\source"
     rename_files_by_modified_date(target_directory)

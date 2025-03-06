@@ -17,6 +17,7 @@ import win32con
 import random
 from collections import OrderedDict
 import notification
+import json
 
 # 配置日志
 logging.basicConfig(
@@ -244,18 +245,19 @@ class WeChatMonitor:
                 
         return False
     
-    def scroll_conversation_list(self, direction="down"):
+    def scroll_conversation_list(self, direction="down", max_attempts=30):
         """滚动会话列表
         
         Args:
             direction: 滚动方向，"up"向上，"down"向下
+            max_attempts: 最大尝试次数
         
         Returns:
-            bool: 是否成功滚动
+            int: 滚动后的新会话数量
         """
         if not self.conversation_list:
             logger.warning("找不到会话列表，无法滚动")
-            return False
+            return 0
             
         try:
             # 获取滚动前的会话项
@@ -294,7 +296,7 @@ class WeChatMonitor:
                             time.sleep(0.1)
                 except Exception as e:
                     logger.error(f"使用键盘方法滚动失败: {e}")
-                    return False
+                    return 0
             
             # 检查滚动后的会话项
             time.sleep(0.5)
@@ -303,15 +305,15 @@ class WeChatMonitor:
             # 检查是否有变化
             if before_items == after_items:
                 logger.info(f"滚动{direction}后会话列表没有变化")
-                return False
+                return 0
             else:
                 new_count = len(set(after_items) - set(before_items))
                 logger.info(f"滚动{direction}后会话列表有 {new_count} 个新会话")
-                return True
+                return new_count
                 
         except Exception as e:
             logger.error(f"滚动会话列表时出错: {e}")
-            return False
+            return 0
     
     def click_conversation(self, conversation_item):
         """点击指定的会话项
@@ -334,12 +336,18 @@ class WeChatMonitor:
             name = conversation_item.Name if hasattr(conversation_item, "Name") else "未知会话"
             logger.info(f"尝试点击会话: {name}")
             
+            # 获取点击前的聊天窗口标题，用于后续比较
+            pre_chat_title = self.get_chat_window_title()
+            logger.info(f"点击前的聊天窗口标题: {pre_chat_title}")
+            
             # 使用控件自带的点击方法
             try:
                 conversation_item.Click(simulateMove=False)
                 logger.info(f"已点击会话: {name}")
-                time.sleep(0.5)  # 等待界面响应
-                return True
+                time.sleep(1.0)  # 等待界面响应
+                
+                # 验证是否切换到对应的聊天窗口
+                return self.verify_chat_window_switched(name, pre_chat_title)
             except Exception as e:
                 logger.warning(f"直接点击会话控件失败: {e}，尝试其他方法")
                 
@@ -360,14 +368,83 @@ class WeChatMonitor:
                     # 使用坐标点击
                     auto.Click(click_x, click_y)
                     logger.info(f"已通过坐标点击会话: {name} 在位置 ({click_x}, {click_y})")
-                    time.sleep(0.5)
-                    return True
+                    time.sleep(1.0)
+                    
+                    # 验证是否切换到对应的聊天窗口
+                    return self.verify_chat_window_switched(name, pre_chat_title)
                 except Exception as e:
                     logger.error(f"通过坐标点击会话失败: {e}")
                     return False
         except Exception as e:
             logger.error(f"点击会话过程中出错: {e}")
             return False
+            
+    def get_chat_window_title(self):
+        """获取当前聊天窗口的标题
+        
+        Returns:
+            str: 聊天窗口标题，如果获取失败则返回空字符串
+        """
+        try:
+            # 尝试查找标题栏
+            for control in self.wechat_window.GetChildren():
+                if control.ControlTypeName == "TitleBarControl" and hasattr(control, "Name"):
+                    title = control.Name
+                    # 微信窗口标题通常是 "会话名称 - 微信"
+                    if " - 微信" in title:
+                        return title.replace(" - 微信", "")
+                    return title
+                    
+            # 备用方法：尝试在聊天窗口顶部查找会话名称
+            pane_controls = self.wechat_window.GetChildren(lambda c: c.ControlTypeName == "PaneControl")
+            for pane in pane_controls:
+                # 查找可能包含会话名称的文本控件
+                text_controls = pane.GetChildren(lambda c: c.ControlTypeName == "TextControl")
+                if text_controls and len(text_controls) > 0:
+                    for text in text_controls:
+                        if hasattr(text, "Name") and text.Name and len(text.Name) > 0:
+                            # 通常第一个有文本的控件是会话名称
+                            return text.Name
+            
+            return ""
+        except Exception as e:
+            logger.error(f"获取聊天窗口标题时出错: {e}")
+            return ""
+            
+    def verify_chat_window_switched(self, expected_name, previous_title, max_attempts=3):
+        """验证聊天窗口是否成功切换到目标会话
+        
+        Args:
+            expected_name: 预期的会话名称
+            previous_title: 切换前的窗口标题
+            max_attempts: 最大尝试次数
+            
+        Returns:
+            bool: 是否成功切换
+        """
+        for attempt in range(max_attempts):
+            # 获取当前窗口标题
+            current_title = self.get_chat_window_title()
+            logger.info(f"当前聊天窗口标题: {current_title} (尝试 {attempt+1}/{max_attempts})")
+            
+            # 检查是否与预期名称匹配
+            if expected_name in current_title or current_title == expected_name:
+                logger.info(f"成功切换到目标会话: {expected_name}")
+                return True
+                
+            # 检查是否有变化
+            if current_title != previous_title and current_title:
+                logger.info(f"聊天窗口已切换，但标题与预期不完全匹配 (预期: {expected_name}, 实际: {current_title})")
+                # 尽管不完全匹配，但窗口已经切换，我们接受这个结果
+                return True
+                
+            # 如果没有变化且尚未达到最大尝试次数，等待一会再次检查
+            if attempt < max_attempts - 1:
+                logger.info(f"聊天窗口未切换，等待重试... (预期: {expected_name}, 当前: {current_title})")
+                time.sleep(1.0)
+        
+        logger.warning(f"无法确认聊天窗口已切换到目标会话: {expected_name}")
+        return False
     
     def get_conversation_messages(self, conversation=None):
         """获取指定会话的消息内容（如果已打开）
@@ -475,110 +552,138 @@ class WeChatMonitor:
             return None
     
     def get_initial_conversations(self):
-        """获取初始的会话列表（仅获取前30个非排除会话）"""
+        """获取初始会话列表
+        
+        Returns:
+            bool: 是否成功获取
+        """
+        # 确保找到微信窗口
+        if not self.find_wechat_window():
+            logger.error("无法找到微信窗口")
+            return False
+            
+        # 尝试找到会话列表
         if not self.find_conversation_list():
-            logger.error("无法获取会话列表")
+            logger.error("无法找到会话列表")
             return False
             
-        try:
-            logger.info("开始获取初始会话列表...")
-            
-            # 清空之前的会话数据
-            self.conversation_dict = OrderedDict()
-            self.all_conversation_items = []
-            self.conversation_positions = {}
-            valid_conversations = 0
-            
-            # 确保更新排除关键词
-            self.update_exclude_keywords()
-            
-            # 滚动到顶部
-            logger.info("尝试滚动到列表顶部...")
-            for _ in range(10):
-                if not self.scroll_conversation_list("up"):
-                    break
-                time.sleep(0.2)
-            
-            logger.info("从顶部开始获取会话...")
-            scroll_attempts = 0
-            
-            # 滚动并获取会话，直到达到所需数量或无法继续滚动
-            while valid_conversations < WeChatConfig.MAX_CONVERSATIONS and scroll_attempts < self.max_scroll_attempts:
-                # 获取当前可见的会话项
-                current_items = self.conversation_list.GetChildren()
-                if not current_items:
-                    logger.warning("当前没有可见的会话项")
-                    break
-                    
-                logger.info(f"当前可见会话数: {len(current_items)}")
+        # 清空之前的数据
+        self.conversation_dict.clear()
+        self.all_conversation_items.clear()
+        self.processed_ids.clear()
+        self.conversation_positions.clear()
+        
+        # 计数器
+        valid_conversations = 0
+        
+        logger.info("开始获取初始会话列表...")
+        
+        # 尝试滚动到顶部
+        logger.info("尝试滚动到列表顶部...")
+        self.scroll_conversation_list(direction="up", max_attempts=10)
+        
+        logger.info("从顶部开始获取会话...")
+        scroll_attempts = 0
+        
+        # 滚动并获取会话，直到达到所需数量或无法继续滚动
+        while valid_conversations < WeChatConfig.MAX_CONVERSATIONS and scroll_attempts < self.max_scroll_attempts:
+            # 获取当前可见的会话项
+            current_items = self.conversation_list.GetChildren()
+            if not current_items:
+                logger.warning("当前没有可见的会话项")
+                break
                 
-                # 处理当前可见的会话项
-                for item in current_items:
+            logger.info(f"当前可见会话数: {len(current_items)}")
+            
+            # 处理当前可见的会话项
+            for item in current_items:
+                try:
+                    # 获取会话名称
+                    name = item.Name if hasattr(item, "Name") else f"会话 {len(self.conversation_dict)}"
+                    
+                    # 生成会话ID
+                    conv_id = self.generate_conversation_id(item)
+                    
+                    # 如果已处理过该会话或应该被排除，则跳过
+                    if conv_id in self.processed_ids or self.should_exclude_conversation(name):
+                        continue
+                        
+                    # 标记为已处理
+                    self.processed_ids.add(conv_id)
+                    
+                    # 创建会话信息
+                    conversation_info = self.create_conversation_info(item, valid_conversations)
+                    if not conversation_info:
+                        continue
+                    
+                    # 添加到会话字典 - 使用ID作为键
+                    self.conversation_dict[conv_id] = conversation_info
+                    self.all_conversation_items.append(item)
+                    
+                    # 更新位置索引
+                    self.conversation_positions[conv_id] = valid_conversations
+                    
+                    # 输出会话信息
+                    unread_status = "【有未读】" if conversation_info["has_unread"] else ""
+                    logger.info(f"{valid_conversations + 1}. {name} {unread_status}")
+                    
+                    # 获取并保存聊天记录
                     try:
-                        # 获取会话名称
-                        name = item.Name if hasattr(item, "Name") else f"会话 {len(self.conversation_dict)}"
+                        logger.info(f"获取 '{name}' 的聊天记录")
                         
-                        # 生成会话ID
-                        conv_id = self.generate_conversation_id(item)
-                        
-                        # 如果已处理过该会话或应该被排除，则跳过
-                        if conv_id in self.processed_ids or self.should_exclude_conversation(name):
-                            continue
+                        # 点击会话打开聊天窗口
+                        if self.click_conversation(item):
+                            # 等待聊天窗口加载
+                            time.sleep(1.5)
                             
-                        # 标记为已处理
-                        self.processed_ids.add(conv_id)
-                        
-                        # 创建会话信息
-                        conversation_info = self.create_conversation_info(item, valid_conversations)
-                        if not conversation_info:
-                            continue
-                        
-                        # 添加到会话字典 - 使用ID作为键
-                        self.conversation_dict[conv_id] = conversation_info
-                        self.all_conversation_items.append(item)
-                        
-                        # 更新位置索引
-                        self.conversation_positions[conv_id] = valid_conversations
-                        
-                        # 输出会话信息
-                        unread_status = "【有未读】" if conversation_info["has_unread"] else ""
-                        logger.info(f"{valid_conversations + 1}. {name} {unread_status}")
-                        
-                        # 计数有效会话
-                        valid_conversations += 1
-                        
-                        # 如果已达到目标数量，结束处理
-                        if valid_conversations >= WeChatConfig.MAX_CONVERSATIONS:
-                            break
+                            # 获取当前窗口标题，再次确认
+                            current_title = self.get_chat_window_title()
+                            if current_title and name not in current_title and current_title not in name:
+                                logger.warning(f"聊天窗口标题 '{current_title}' 与会话名称 '{name}' 不匹配，可能切换失败")
+                                # 继续尝试获取聊天记录
                             
+                            # 获取聊天记录
+                            chat_records = self.get_chat_records(page=3)  # 获取3页聊天记录
+                            
+                            # 保存聊天记录
+                            if chat_records:
+                                self.save_chat_records(conv_id, name, chat_records)
+                                logger.info(f"已保存 '{name}' 的聊天记录，共 {len(chat_records)} 条")
+                            else:
+                                logger.warning(f"未获取到 '{name}' 的聊天记录")
+                        else:
+                            logger.warning(f"点击会话 '{name}' 失败或无法确认切换，跳过获取聊天记录")
                     except Exception as e:
-                        logger.error(f"处理会话项时出错: {e}")
-                
-                # 如果已达到目标数量，结束处理
-                if valid_conversations >= WeChatConfig.MAX_CONVERSATIONS:
-                    break
+                        logger.error(f"获取 '{name}' 的聊天记录时出错: {e}")
                     
-                # 尝试向下滚动获取更多会话
-                if not self.scroll_conversation_list("down"):
-                    logger.info("无法再向下滚动，可能已到达列表底部")
-                    scroll_attempts += 1
+                    # 计数有效会话
+                    valid_conversations += 1
                     
-                    if scroll_attempts >= 3:
-                        logger.info("多次尝试滚动无效，停止获取")
+                    # 如果已达到目标数量，结束处理
+                    if valid_conversations >= WeChatConfig.MAX_CONVERSATIONS:
                         break
-                else:
-                    # 成功滚动，重置尝试计数
-                    scroll_attempts = 0
+                        
+                except Exception as e:
+                    logger.error(f"处理会话项时出错: {e}")
+            
+            # 如果已经达到目标数量，结束循环
+            if valid_conversations >= WeChatConfig.MAX_CONVERSATIONS:
+                break
                 
-                # 短暂暂停，避免滚动过快
-                time.sleep(0.2)
+            # 尝试向下滚动以获取更多会话
+            logger.info("尝试滚动以获取更多会话...")
+            new_items_count = self.scroll_conversation_list(direction="down")
             
-            logger.info(f"==== 初始会话列表获取完成 (共 {len(self.conversation_dict)} 个) ====")
-            return True
+            # 如果向下滚动后没有新会话，说明已到达底部
+            if new_items_count == 0:
+                logger.info("已到达会话列表底部")
+                break
+                
+            scroll_attempts += 1
             
-        except Exception as e:
-            logger.error(f"获取初始会话列表时出错: {e}")
-            return False
+        logger.info(f"==== 初始会话列表获取完成 (共 {valid_conversations} 个) ====")
+        
+        return valid_conversations > 0
     
     def get_current_visible_conversations(self):
         """获取当前可见的会话信息"""
@@ -788,20 +893,15 @@ class WeChatMonitor:
         """
         logger.info("开始监控微信会话列表...")
         
-        # 初始计数器，用于定期输出心跳信息
-        heartbeat_counter = 0
-        
         # 确保更新排除关键词
         self.update_exclude_keywords()
-        
-        # 用于存储已通知的消息，避免重复通知
-        notification_history = {}
         
         # 首先获取初始会话列表
         if not self.get_initial_conversations():
             logger.error("初始化会话列表失败")
             return
-        
+            
+        # 开始轮询
         while True:
             try:
                 # 确保微信窗口存在
@@ -811,17 +911,8 @@ class WeChatMonitor:
                         time.sleep(check_interval)
                         continue
                 
-                # 心跳信息，让用户知道脚本在运行
-                heartbeat_counter += 1
-                if heartbeat_counter % 12 == 0:  # 大约每分钟输出一次
-                    logger.info("监控脚本正在运行中...")
-                    self.print_conversation_stats()
-                
-                # 检查会话更新状态
-                self.check_conversation_updates()
-                
-                # 检查新消息通知
-                self.check_new_messages(notification_history)
+                # 检查会话更新
+                self.check_chat_records_updates()
                 
                 # 等待下一次检查
                 time.sleep(check_interval)
@@ -832,135 +923,423 @@ class WeChatMonitor:
             except KeyboardInterrupt:
                 logger.info("用户中断，退出监控")
                 break
-
-    def check_new_messages(self, notification_history, notification_timeout=15):
-        """检查是否有新消息并发送通知
+                
+    def fetch_all_chat_records(self):
+        """获取所有会话的聊天记录"""
+        count = 0
+        max_count = min(len(self.conversation_dict), WeChatConfig.MAX_CONVERSATIONS)
         
-        Args:
-            notification_history: 历史通知记录字典
-            notification_timeout: 同一消息再次通知的最小间隔时间(秒)
-        """
-        try:
-            # 确保微信窗口存在
-            if not self.wechat_window or not self.wechat_window.Exists():
-                return
-                
-            # 获取会话列表控件
-            conversation_list = self.wechat_window.ListControl(Name="会话")
-            if not conversation_list.Exists(1):
-                logger.warning("未找到会话列表控件")
-                return
-                
-            # 获取所有会话项
-            chat_items = conversation_list.GetChildren()
-            logger.debug(f"获取到 {len(chat_items)} 个会话项")
+        logger.info(f"准备获取 {max_count} 个会话的聊天记录")
+        
+        # 创建保存聊天记录的目录
+        chat_records_dir = "chat_records"
+        if not os.path.exists(chat_records_dir):
+            os.makedirs(chat_records_dir)
             
-            # 检查每个会话项是否有新消息
-            for chat_item in chat_items:
-                if not hasattr(chat_item, "Name") or not chat_item.Name:
+        # 逐个获取会话的聊天记录
+        for conv_id, conv in list(self.conversation_dict.items())[:max_count]:
+            try:
+                count += 1
+                name = conv.get('name', '未知会话')
+                
+                # 跳过排除的会话
+                if self.should_exclude_conversation(name):
+                    logger.info(f"跳过排除的会话: {name}")
                     continue
                     
-                chat_name = chat_item.Name
+                logger.info(f"[{count}/{max_count}] 获取 '{name}' 的聊天记录")
                 
-                # 检查是否包含"条新消息"
-                if "条新消息" in chat_name:
-                    logger.info(f"检测到新消息: {chat_name}")
+                # 点击会话
+                item = conv.get('item')
+                if not item or not isinstance(item, auto.Control) or not item.Exists(1):
+                    logger.warning(f"会话项 '{name}' 无效或不存在，跳过")
+                    continue
+                
+                # 点击会话打开聊天窗口
+                if not self.click_conversation(item):
+                    logger.warning(f"点击会话 '{name}' 失败或无法确认切换，跳过")
+                    continue
                     
-                    # 解析消息数量
-                    match = re.search(r'([^0-9]*)(\d+)条新消息', chat_name)
-                    if match:
-                        nickname = match.group(1).strip()
-                        message_count = int(match.group(2))
-                        
-                        logger.info(f"{nickname} 发来了 {message_count} 条新消息")
-                        
-                        # 尝试获取最新消息内容
-                        last_message = self.get_last_message(chat_item)
-                        
-                        # 构建通知键
-                        notification_key = (nickname, message_count)
-                        
-                        # 检查是否需要发送通知（避免重复通知）
-                        last_notification_time = notification_history.get(notification_key, 0)
-                        current_time = time.time()
-                        
-                        if current_time - last_notification_time > notification_timeout:
-                            # 发送系统通知
-                            self.send_notification(
-                                title=f"来自 {nickname} 的 {message_count} 条消息", 
-                                message=last_message or f"有 {message_count} 条新消息"
-                            )
-                            
-                            # 更新通知历史
-                            notification_history[notification_key] = current_time
-                            
-                            logger.info(f"已发送 {nickname} 的新消息通知")
-                        else:
-                            logger.info(f"跳过 {nickname} 的通知 (通知冷却中)")
-        
-        except Exception as e:
-            logger.error(f"检查新消息时出错: {e}")
+                # 等待聊天窗口完全加载
+                time.sleep(1.5)
+                
+                # 获取当前窗口标题，再次确认
+                current_title = self.get_chat_window_title()
+                if current_title and name not in current_title and current_title not in name:
+                    logger.warning(f"聊天窗口标题 '{current_title}' 与会话名称 '{name}' 不匹配，可能切换失败")
+                    # 我们仍然继续，但记录警告
+                
+                # 获取聊天记录
+                chat_records = self.get_chat_records(page=3)  # 获取3页聊天记录，可以根据需要调整
+                
+                # 保存聊天记录
+                if chat_records:
+                    self.save_chat_records(conv_id, name, chat_records)
+                    logger.info(f"已保存 '{name}' 的聊天记录，共 {len(chat_records)} 条")
+                else:
+                    logger.warning(f"未获取到 '{name}' 的聊天记录")
+                
+                # 短暂暂停，避免操作过快
+                time.sleep(random.uniform(0.5, 1.0))
+                
+            except Exception as e:
+                logger.error(f"获取 '{conv.get('name', '未知会话')}' 的聊天记录时出错: {e}")
+                
+        logger.info(f"聊天记录获取完成，共处理 {count} 个会话")
     
-    def get_last_message(self, chat_item):
-        """尝试获取最后一条消息内容
+    def get_chat_records(self, page=1):
+        """获取当前打开会话的聊天记录
         
         Args:
-            chat_item: 会话项控件
+            page(int): 获取的页数，默认为1页
             
         Returns:
-            str: 最后一条消息内容，如果获取失败则返回None
+            list: 聊天记录列表
         """
         try:
-            # 点击会话项
-            chat_item.Click()
-            time.sleep(0.5)
+            chat_records = []
             
-            # 获取消息列表控件
-            message_list = self.wechat_window.ListControl(Name="消息")
-            if not message_list.Exists(1):
-                logger.warning("未找到消息列表控件")
-                return None
+            def extract_msg():
+                """提取消息内容"""
+                try:
+                    # 获取消息列表控件
+                    msg_list = self.wechat_window.ListControl(Name="消息")
+                    if not msg_list.Exists(1):
+                        logger.warning("未找到消息列表控件")
+                        return
+                        
+                    # 获取所有消息项
+                    all_msgs = msg_list.GetChildren()
+                    if all_msgs:
+                        logger.info(f"获取到 {len(all_msgs)} 条消息")
+                    else:
+                        logger.warning("消息列表为空")
+                        return
+                    
+                    # 处理每条消息
+                    for msg_node in all_msgs:
+                        if not hasattr(msg_node, "Name") or not msg_node.Name:
+                            continue
+                            
+                        msg = msg_node.Name
+                        record = {
+                            'type': 'Unknown',
+                            'name': 'Unknown',
+                            'msg': msg,
+                            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
+                        
+                        # 处理时间消息
+                        try:
+                            if hasattr(msg_node, "PaneControl") and msg_node.PaneControl().Exists() and hasattr(msg_node.PaneControl(), "Name") and msg_node.PaneControl().Name:
+                                record = {
+                                    'type': 'Time',
+                                    'name': 'System',
+                                    'msg': msg_node.PaneControl().Name,
+                                    'timestamp': msg_node.PaneControl().Name  # 使用消息中的时间
+                                }
+                                chat_records.append(record)
+                                continue
+                        except:
+                            pass
+                            
+                        # 处理系统消息
+                        if msg in ['以下为新消息', '查看更多消息', '该类型文件可能存在安全风险，建议先检查文件安全性后再打开。', '已撤回']:
+                            record = {
+                                'type': 'System',
+                                'name': 'System',
+                                'msg': msg
+                            }
+                            chat_records.append(record)
+                            continue
+                            
+                        # 处理撤回消息
+                        if '撤回了一条消息' in msg or '尝试撤回上一条消息' in msg:
+                            name_parts = msg.split(' ')
+                            record = {
+                                'type': 'Other',
+                                'name': ''.join(name_parts[:-1]),
+                                'msg': name_parts[-1]
+                            }
+                            chat_records.append(record)
+                            continue
+                            
+                        # 处理红包消息
+                        if msg in ['发出红包，请在手机上查看', '收到红包，请在手机上查看', '你发送了一次转账收款提醒，请在手机上查看', '你收到了一次转账收款提醒，请在手机上查看']:
+                            record = {
+                                'type': 'RedEnvelope',
+                                'name': 'System',
+                                'msg': msg
+                            }
+                            chat_records.append(record)
+                            continue
+                            
+                        # 尝试获取发送者名称
+                        sender_name = "Unknown"
+                        try:
+                            # 通常发送者名称在ButtonControl中
+                            if hasattr(msg_node, "ButtonControl") and msg_node.ButtonControl(foundIndex=1).Exists():
+                                sender_name = msg_node.ButtonControl(foundIndex=1).Name
+                        except:
+                            pass
+                            
+                        record = {
+                            'type': 'Content',
+                            'name': sender_name,
+                            'msg': msg
+                        }
+                        chat_records.append(record)
+                    
+                    if chat_records:
+                        logger.info(f"提取了 {len(chat_records)} 条消息")
+                    
+                except Exception as e:
+                    logger.error(f"提取消息时出错: {e}")
+            
+            logger.info(f"正在获取{page}页聊天记录...")
+            
+            # 向上滚动查看更多消息
+            for i in range(page):
+                self.wechat_window.WheelUp(wheelTimes=15)
+                logger.info(f"已向上滚动第{i+1}页")
+                time.sleep(0.5)
                 
-            # 获取消息列表的子控件
-            message_items = message_list.GetChildren()
-            if not message_items:
-                logger.warning("消息列表为空")
-                return None
-                
-            # 获取最后一条消息
-            last_message = message_items[-1]
-            if hasattr(last_message, "Name") and last_message.Name:
-                return last_message.Name
-                
-            return None
+            # 提取消息
+            extract_msg()
+            
+            # 按时间戳排序（如果有）
+            chat_records.sort(key=lambda x: x.get('timestamp', '1970-01-01 00:00:00'))
+            
+            return chat_records
             
         except Exception as e:
-            logger.error(f"获取最后一条消息时出错: {e}")
-            return None
+            logger.error(f"获取聊天记录时出错: {e}")
+            return []
     
-    def send_notification(self, title, message):
-        """发送系统通知
+    def save_chat_records(self, conv_id, name, chat_records):
+        """保存聊天记录到文件
         
         Args:
-            title: 通知标题
-            message: 通知内容
+            conv_id: 会话ID
+            name: 会话名称
+            chat_records: 聊天记录列表
         """
         try:
-            # 使用Windows通知
-            notification.notify(
-                title=title,
-                message=message,
-                app_name="WeChatMonitor",
-                timeout=10  # 通知显示10秒
-            )
-        except Exception as e:
-            logger.error(f"发送通知时出错: {e}")
+            # 处理文件名，移除非法字符
+            safe_name = re.sub(r'[\\/*?:"<>|]', "_", name)
             
-            # 备用方案：使用系统命令发送通知
-            try:
-                os.system(f'msg "%username%" "{title}: {message}"')
-            except:
-                logger.error("备用通知方式也失败了")
+            # 创建文件名
+            filename = f"chat_records/{safe_name}_{conv_id}.json"
+            
+            # 添加时间戳
+            data = {
+                'conv_id': conv_id,
+                'name': name,
+                'last_update': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'records': chat_records
+            }
+            
+            # 写入文件
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                
+        except Exception as e:
+            logger.error(f"保存聊天记录时出错: {e}")
+    
+    def check_chat_records_updates(self):
+        """检查所有会话的聊天记录是否有更新"""
+        try:
+            count = 0
+            updated_count = 0
+            max_count = min(len(self.conversation_dict), WeChatConfig.MAX_CONVERSATIONS)
+            
+            logger.info(f"开始检查 {max_count} 个会话的聊天记录更新...")
+            
+            # 确保微信窗口激活
+            if not self.find_wechat_window():
+                logger.error("无法找到微信窗口")
+                return
+            
+            # 逐个检查会话的聊天记录
+            for conv_id, conv in list(self.conversation_dict.items())[:max_count]:
+                try:
+                    count += 1
+                    name = conv.get('name', '未知会话')
+                    
+                    # 跳过排除的会话
+                    if self.should_exclude_conversation(name):
+                        continue
+                        
+                    logger.info(f"[{count}/{max_count}] 检查 '{name}' 的聊天记录更新")
+                    
+                    # 获取会话项
+                    item = conv.get('item')
+                    if not item or not isinstance(item, auto.Control) or not item.Exists(1):
+                        logger.warning(f"会话项不存在或无效，尝试重新查找...")
+                        
+                        # 尝试刷新会话列表
+                        if not self.find_conversation_list():
+                            logger.error("无法找到会话列表")
+                            continue
+                            
+                        # 尝试通过名称查找会话项
+                        found = False
+                        visible_items = self.conversation_list.GetChildren()
+                        for visible_item in visible_items:
+                            if hasattr(visible_item, "Name") and visible_item.Name == name:
+                                item = visible_item
+                                conv['item'] = item  # 更新会话项引用
+                                found = True
+                                logger.info(f"重新找到会话项: {name}")
+                                break
+                                
+                        if not found:
+                            logger.warning(f"无法找到会话项: {name}")
+                            continue
+                    
+                    # 点击会话打开聊天窗口
+                    if not self.click_conversation(item):
+                        logger.warning(f"点击会话 '{name}' 失败或无法确认切换，跳过")
+                        continue
+                        
+                    # 等待聊天窗口加载
+                    time.sleep(1.5)
+                    
+                    # 获取当前窗口标题，再次确认
+                    current_title = self.get_chat_window_title()
+                    if current_title and name not in current_title and current_title not in name:
+                        logger.warning(f"聊天窗口标题 '{current_title}' 与会话名称 '{name}' 不匹配，可能切换失败")
+                        # 继续尝试获取聊天记录，但记录警告
+                    
+                    # 获取最新聊天记录
+                    new_records = self.get_chat_records(page=1)  # 只获取1页，减少滚动次数
+                    if not new_records:
+                        logger.warning(f"未获取到 '{name}' 的最新聊天记录")
+                        continue
+                        
+                    # 读取旧记录
+                    old_records = self.read_chat_records(conv_id, name)
+                    
+                    # 比较记录，检查是否有更新
+                    has_updates = self.compare_chat_records(old_records, new_records)
+                    
+                    if has_updates:
+                        # 合并记录
+                        merged_records = self.merge_chat_records(old_records, new_records)
+                        
+                        # 保存更新后的记录
+                        self.save_chat_records(conv_id, name, merged_records)
+                        
+                        logger.info(f"'{name}' 的聊天记录有更新，已保存")
+                        updated_count += 1
+                    else:
+                        logger.info(f"'{name}' 的聊天记录没有更新")
+                    
+                    # 短暂暂停，避免操作过快
+                    time.sleep(random.uniform(0.5, 1.0))
+                    
+                except Exception as e:
+                    logger.error(f"检查 '{conv.get('name', '未知会话')}' 的聊天记录更新时出错: {e}")
+                    
+            logger.info(f"聊天记录更新检查完成，共处理 {count} 个会话，{updated_count} 个有更新")
+            
+        except Exception as e:
+            logger.error(f"检查聊天记录更新时出错: {e}")
+    
+    def read_chat_records(self, conv_id, name):
+        """读取保存的聊天记录
+        
+        Args:
+            conv_id: 会话ID
+            name: 会话名称
+            
+        Returns:
+            list: 聊天记录列表
+        """
+        try:
+            # 处理文件名，移除非法字符
+            safe_name = re.sub(r'[\\/*?:"<>|]', "_", name)
+            
+            # 创建文件名
+            filename = f"chat_records/{safe_name}_{conv_id}.json"
+            
+            # 如果文件不存在，返回空列表
+            if not os.path.exists(filename):
+                return []
+                
+            # 读取文件
+            with open(filename, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                
+            return data.get('records', [])
+            
+        except Exception as e:
+            logger.error(f"读取聊天记录时出错: {e}")
+            return []
+    
+    def compare_chat_records(self, old_records, new_records):
+        """比较新旧聊天记录，检查是否有更新
+        
+        Args:
+            old_records: 旧聊天记录列表
+            new_records: 新聊天记录列表
+            
+        Returns:
+            bool: 是否有更新
+        """
+        # 如果没有旧记录，认为有更新
+        if not old_records:
+            return True
+            
+        # 如果新记录为空，认为没有更新
+        if not new_records:
+            return False
+            
+        # 创建旧记录的消息集合
+        old_msg_set = set()
+        for record in old_records:
+            # 使用消息内容和发送者作为标识
+            key = f"{record.get('name', '')}:{record.get('msg', '')}"
+            old_msg_set.add(key)
+            
+        # 检查新记录中是否有不在旧记录中的消息
+        for record in new_records:
+            key = f"{record.get('name', '')}:{record.get('msg', '')}"
+            if key not in old_msg_set:
+                return True
+                
+        return False
+    
+    def merge_chat_records(self, old_records, new_records):
+        """合并新旧聊天记录，移除重复消息
+        
+        Args:
+            old_records: 旧聊天记录列表
+            new_records: 新聊天记录列表
+            
+        Returns:
+            list: 合并后的聊天记录列表
+        """
+        # 创建消息字典，以消息内容和发送者作为键
+        record_dict = {}
+        
+        # 添加旧记录
+        for record in old_records:
+            key = f"{record.get('name', '')}:{record.get('msg', '')}"
+            record_dict[key] = record
+            
+        # 添加新记录（覆盖相同的旧记录）
+        for record in new_records:
+            key = f"{record.get('name', '')}:{record.get('msg', '')}"
+            record_dict[key] = record
+            
+        # 转换回列表
+        merged_records = list(record_dict.values())
+        
+        # 按时间戳排序（如果有）
+        merged_records.sort(key=lambda x: x.get('timestamp', '1970-01-01 00:00:00'))
+        
+        return merged_records
 
 
 if __name__ == "__main__":
@@ -975,12 +1354,8 @@ if __name__ == "__main__":
         
         # 尝试查找微信窗口
         if monitor.find_wechat_window():
-            # 获取初始会话列表
-            if monitor.get_initial_conversations():
-                # 开始监控，每2秒检查一次
-                monitor.monitor(check_interval=2)
-            else:
-                logger.error("无法获取初始会话列表")
+            # 开始监控，每30秒检查一次
+            monitor.monitor(check_interval=30)
         else:
             logger.error("无法找到微信窗口，请确保微信已经登录并正在运行")
     except KeyboardInterrupt:

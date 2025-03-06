@@ -15,6 +15,7 @@ from datetime import datetime
 import win32gui
 import win32con
 import random
+from collections import OrderedDict
 
 # 配置日志
 logging.basicConfig(
@@ -47,8 +48,8 @@ class WeChatMonitor:
         self.conversation_list = None
         # 调试模式
         self.debug = True
-        # 会话数据
-        self.conversations = []
+        # 会话数据 - 使用OrderedDict保持顺序性
+        self.conversation_dict = OrderedDict()
         # 当前会话列表的所有项目
         self.all_conversation_items = []
         # 最大滚动尝试次数
@@ -57,6 +58,17 @@ class WeChatMonitor:
         self.auto_click_enabled = False
         # 已处理会话ID
         self.processed_ids = set()
+        # 上次检查时间
+        self.last_check_time = datetime.now()
+        # 会话位置索引
+        self.conversation_positions = {}
+        
+    def update_exclude_keywords(self):
+        """更新排除关键词，添加自己的用户名"""
+        if self.username and self.username not in WeChatConfig.EXCLUDE_KEYWORDS:
+            # 添加用户名到排除列表，避免检测自己发给自己的消息
+            WeChatConfig.EXCLUDE_KEYWORDS.append(self.username)
+            logger.info(f"已添加用户名 '{self.username}' 到排除列表")
         
     def wake_up_window(self):
         """激活微信窗口，使用win32gui方法"""
@@ -426,19 +438,58 @@ class WeChatMonitor:
             logger.error(f"获取会话消息时出错: {e}")
             return []
     
+    def create_conversation_info(self, item, index=0):
+        """从会话项创建会话信息字典
+        
+        Args:
+            item: 会话控件项
+            index: 会话索引
+            
+        Returns:
+            dict: 会话信息字典
+        """
+        try:
+            # 获取会话名称
+            name = item.Name if hasattr(item, "Name") else f"会话 {index}"
+            
+            # 生成会话ID
+            conv_id = self.generate_conversation_id(item)
+            
+            # 检查是否有未读标记
+            has_unread = self.check_conversation_unread(item)
+            
+            # 创建会话信息
+            return {
+                "index": index,
+                "name": name,
+                "id": conv_id,
+                "has_unread": has_unread,
+                "item": item,  # 存储控件引用
+                "last_update": datetime.now(),  # 记录最后更新时间
+                "position": index,  # 记录位置
+                "is_valid": True  # 标记是否有效
+            }
+        except Exception as e:
+            logger.error(f"创建会话信息时出错: {e}")
+            return None
+    
     def get_initial_conversations(self):
         """获取初始的会话列表（仅获取前30个非排除会话）"""
         if not self.find_conversation_list():
             logger.error("无法获取会话列表")
-            return []
+            return False
             
         try:
             logger.info("开始获取初始会话列表...")
             
             # 清空之前的会话数据
-            self.conversations = []
+            self.conversation_dict = OrderedDict()
             self.all_conversation_items = []
+            self.conversation_positions = {}
             valid_conversations = 0
+            
+            # 确保更新排除关键词
+            self.update_exclude_keywords()
             
             # 滚动到顶部
             logger.info("尝试滚动到列表顶部...")
@@ -464,7 +515,7 @@ class WeChatMonitor:
                 for item in current_items:
                     try:
                         # 获取会话名称
-                        name = item.Name if hasattr(item, "Name") else f"会话 {len(self.conversations)}"
+                        name = item.Name if hasattr(item, "Name") else f"会话 {len(self.conversation_dict)}"
                         
                         # 生成会话ID
                         conv_id = self.generate_conversation_id(item)
@@ -476,23 +527,21 @@ class WeChatMonitor:
                         # 标记为已处理
                         self.processed_ids.add(conv_id)
                         
-                        # 检查是否有未读标记
-                        has_unread = self.check_conversation_unread(item)
-                        unread_status = "【有未读】" if has_unread else ""
+                        # 创建会话信息
+                        conversation_info = self.create_conversation_info(item, valid_conversations)
+                        if not conversation_info:
+                            continue
                         
-                        # 添加到会话列表
-                        conversation_info = {
-                            "index": len(self.conversations),
-                            "name": name,
-                            "id": conv_id,
-                            "has_unread": has_unread,
-                            "item": item  # 存储控件引用
-                        }
-                        
-                        self.conversations.append(conversation_info)
+                        # 添加到会话字典 - 使用ID作为键
+                        self.conversation_dict[conv_id] = conversation_info
                         self.all_conversation_items.append(item)
                         
-                        logger.info(f"{len(self.conversations)}. {name} {unread_status}")
+                        # 更新位置索引
+                        self.conversation_positions[conv_id] = valid_conversations
+                        
+                        # 输出会话信息
+                        unread_status = "【有未读】" if conversation_info["has_unread"] else ""
+                        logger.info(f"{valid_conversations + 1}. {name} {unread_status}")
                         
                         # 计数有效会话
                         valid_conversations += 1
@@ -523,16 +572,136 @@ class WeChatMonitor:
                 # 短暂暂停，避免滚动过快
                 time.sleep(0.2)
             
-            logger.info(f"==== 初始会话列表获取完成 (共 {len(self.conversations)} 个) ====")
-            return self.conversations
+            logger.info(f"==== 初始会话列表获取完成 (共 {len(self.conversation_dict)} 个) ====")
+            return True
             
         except Exception as e:
             logger.error(f"获取初始会话列表时出错: {e}")
-            return []
+            return False
+    
+    def get_current_visible_conversations(self):
+        """获取当前可见的会话信息"""
+        if not self.conversation_list:
+            if not self.find_conversation_list():
+                logger.error("无法获取会话列表")
+                return []
+        
+        # 获取当前可见的会话项
+        current_items = self.conversation_list.GetChildren()
+        
+        # 收集可见会话信息
+        visible_conversations = []
+        for i, item in enumerate(current_items):
+            try:
+                name = item.Name if hasattr(item, "Name") else f"会话 {i}"
+                conv_id = self.generate_conversation_id(item)
+                
+                # 如果应该被排除，则跳过
+                if self.should_exclude_conversation(name):
+                    continue
+                
+                # 检查是否有未读
+                has_unread = self.check_conversation_unread(item)
+                
+                visible_conversations.append({
+                    "name": name,
+                    "id": conv_id,
+                    "has_unread": has_unread,
+                    "item": item,
+                    "index": i
+                })
+            except Exception as e:
+                logger.error(f"获取可见会话 {i} 信息时出错: {e}")
+        
+        return visible_conversations
+    
+    def update_conversation_dict(self, visible_conversations):
+        """根据当前可见会话更新会话字典
+        
+        Args:
+            visible_conversations: 当前可见的会话列表
+            
+        Returns:
+            bool: 是否有更新
+        """
+        if not visible_conversations:
+            return False
+            
+        has_updates = False
+        current_time = datetime.now()
+        
+        # 检查所有可见会话
+        for i, conv in enumerate(visible_conversations):
+            conv_id = conv["id"]
+            
+            # 如果是新会话
+            if conv_id not in self.conversation_dict:
+                # 如果已经有30个会话，找到最老的会话移除
+                if len(self.conversation_dict) >= WeChatConfig.MAX_CONVERSATIONS:
+                    # 找到最老的会话（最后更新时间最早的）
+                    oldest_id = None
+                    oldest_time = None
+                    
+                    for cid, cinfo in self.conversation_dict.items():
+                        if oldest_time is None or cinfo["last_update"] < oldest_time:
+                            oldest_time = cinfo["last_update"]
+                            oldest_id = cid
+                    
+                    # 如果找到最老的会话，移除它
+                    if oldest_id:
+                        logger.info(f"移除最旧的会话: {self.conversation_dict[oldest_id]['name']}")
+                        del self.conversation_dict[oldest_id]
+                
+                # 添加新会话
+                logger.info(f"添加新会话: {conv['name']}")
+                
+                # 创建会话信息
+                conversation_info = {
+                    "index": len(self.conversation_dict),
+                    "name": conv["name"],
+                    "id": conv_id,
+                    "has_unread": conv["has_unread"],
+                    "item": conv["item"],
+                    "last_update": current_time,
+                    "position": i,
+                    "is_valid": True
+                }
+                
+                # 添加到会话字典
+                self.conversation_dict[conv_id] = conversation_info
+                has_updates = True
+            else:
+                # 更新现有会话
+                existing_conv = self.conversation_dict[conv_id]
+                
+                # 检查是否有状态变化
+                if existing_conv["has_unread"] != conv["has_unread"] or existing_conv["position"] != i:
+                    logger.info(f"更新会话状态: {conv['name']}")
+                    
+                    # 更新会话信息
+                    existing_conv["has_unread"] = conv["has_unread"]
+                    existing_conv["position"] = i
+                    existing_conv["last_update"] = current_time
+                    existing_conv["item"] = conv["item"]  # 更新控件引用
+                    has_updates = True
+        
+        # 如果有更新，重新排序会话字典
+        if has_updates:
+            # 基于位置排序，确保最新的会话在前面
+            sorted_items = sorted(self.conversation_dict.items(), 
+                                key=lambda x: x[1]["position"] if "position" in x[1] else float('inf'))
+            
+            # 重建有序字典
+            self.conversation_dict = OrderedDict()
+            for i, (conv_id, conv_info) in enumerate(sorted_items):
+                conv_info["index"] = i  # 更新索引
+                self.conversation_dict[conv_id] = conv_info
+        
+        return has_updates
     
     def check_conversation_updates(self):
-        """检查所有已获取会话的更新状态"""
-        if not self.conversations:
+        """检查会话更新状态并更新会话字典"""
+        if not self.conversation_dict:
             logger.warning("没有会话可检查")
             return
             
@@ -544,107 +713,71 @@ class WeChatMonitor:
                 if not self.find_conversation_list():
                     logger.error("无法找到会话列表")
                     return
-            
-            # 滚动到顶部
+                    
+            # 滚动到顶部以获取最新的会话
             logger.info("尝试滚动到列表顶部...")
             for _ in range(5):
                 if not self.scroll_conversation_list("up"):
                     break
                 time.sleep(0.2)
             
-            # 获取当前可见的会话项
-            current_visible = {}
-            for item in self.conversation_list.GetChildren():
-                if hasattr(item, "Name") and item.Name:
-                    current_visible[item.Name] = item
-            
-            # 检查已知会话是否在当前可见列表中
-            checked_count = 0
-            unread_count = 0
-            
-            # 先检查可见的会话
-            for conv in self.conversations:
-                if checked_count >= 5:  # 限制每次检查的会话数
-                    break
-                    
-                # 获取会话名称
-                name = conv.get("name", "")
-                if not name:
-                    continue
+            # 获取当前可见的会话
+            visible_conversations = self.get_current_visible_conversations()
+            if not visible_conversations:
+                logger.warning("未获取到可见会话")
+                return
                 
-                # 如果会话在当前可见列表中
-                if name in current_visible:
-                    item = current_visible[name]
-                    
-                    # 检查是否有未读
-                    has_unread = self.check_conversation_unread(item)
-                    if has_unread:
-                        unread_count += 1
-                        logger.info(f"[通知] 检测到未读会话: {name}")
-                        
-                        # 如果启用了自动点击，点击会话查看内容
-                        if self.auto_click_enabled:
-                            if self.click_conversation(item):
-                                messages = self.get_conversation_messages(conv)
-                                if messages:
-                                    logger.info(f"==== {name} 的最新消息 ====")
-                                    for i, msg in enumerate(messages):
-                                        logger.info(f"  {i+1}. {msg}")
-                    
-                    checked_count += 1
+            # 更新会话字典
+            has_updates = self.update_conversation_dict(visible_conversations)
             
-            # 如果需要，向下滚动检查更多会话
-            if checked_count < len(self.conversations):
-                scroll_attempts = 0
-                while checked_count < len(self.conversations) and scroll_attempts < 10:
-                    # 滚动显示更多会话
-                    if not self.scroll_conversation_list("down"):
-                        scroll_attempts += 1
-                        if scroll_attempts >= 3:
-                            break
-                    else:
-                        scroll_attempts = 0
-                    
-                    # 获取新可见会话
-                    current_visible = {}
-                    for item in self.conversation_list.GetChildren():
-                        if hasattr(item, "Name") and item.Name:
-                            current_visible[item.Name] = item
-                    
-                    # 继续检查剩余会话
-                    for conv in self.conversations[checked_count:]:
-                        if checked_count >= len(self.conversations):
-                            break
-                            
-                        name = conv.get("name", "")
-                        if not name or name not in current_visible:
-                            continue
-                        
-                        item = current_visible[name]
-                        has_unread = self.check_conversation_unread(item)
-                        if has_unread:
-                            unread_count += 1
-                            logger.info(f"[通知] 检测到未读会话: {name}")
-                            
-                            # 如果启用了自动点击，点击会话查看内容
-                            if self.auto_click_enabled:
-                                if self.click_conversation(item):
-                                    messages = self.get_conversation_messages(conv)
-                                    if messages:
-                                        logger.info(f"==== {name} 的最新消息 ====")
-                                        for i, msg in enumerate(messages):
-                                            logger.info(f"  {i+1}. {msg}")
-                        
-                        checked_count += 1
-                        if checked_count % 5 == 0:  # 每检查5个会话后暂停
-                            break
-                    
-                    time.sleep(0.2)
+            # 检查未读消息
+            unread_count = 0
+            checked_count = 0
             
-            logger.info(f"会话检查完成: 检查了 {checked_count} 个会话，发现 {unread_count} 个有未读消息")
+            # 遍历会话字典
+            for conv_id, conv in self.conversation_dict.items():
+                if conv["has_unread"]:
+                    unread_count += 1
+                    logger.info(f"[通知] 检测到未读会话: {conv['name']}")
+                    
+                    # 如果启用了自动点击，点击会话查看内容
+                    if self.auto_click_enabled and hasattr(conv["item"], "Click"):
+                        if self.click_conversation(conv["item"]):
+                            messages = self.get_conversation_messages(conv)
+                            if messages:
+                                logger.info(f"==== {conv['name']} 的最新消息 ====")
+                                for i, msg in enumerate(messages):
+                                    logger.info(f"  {i+1}. {msg}")
+                
+                checked_count += 1
+            
+            if has_updates:
+                logger.info(f"会话列表已更新，现在有 {len(self.conversation_dict)} 个会话")
+            
+            logger.info(f"会话检查完成: 监控 {checked_count} 个会话，发现 {unread_count} 个有未读消息")
             
         except Exception as e:
             logger.error(f"检查会话更新状态时出错: {e}")
+    
+    def print_conversation_stats(self):
+        """打印会话统计信息"""
+        if not self.conversation_dict:
+            logger.info("没有会话数据")
+            return
+            
+        logger.info(f"\n==== 会话统计 (共 {len(self.conversation_dict)} 个) ====")
+        logger.info(f"监控时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # 计算未读会话数
+        unread_count = sum(1 for conv in self.conversation_dict.values() if conv["has_unread"])
+        logger.info(f"未读会话数: {unread_count}")
+        
+        # 打印前5个会话
+        top_convs = list(self.conversation_dict.values())[:5]
+        logger.info("前5个会话:")
+        for i, conv in enumerate(top_convs):
+            unread_mark = "【有未读】" if conv["has_unread"] else ""
+            logger.info(f"  {i+1}. {conv['name']} {unread_mark}")
     
     def monitor(self, check_interval=5):
         """开始监控微信会话列表
@@ -657,8 +790,13 @@ class WeChatMonitor:
         # 初始计数器，用于定期输出心跳信息
         heartbeat_counter = 0
         
+        # 确保更新排除关键词
+        self.update_exclude_keywords()
+        
         # 首先获取初始会话列表
-        self.get_initial_conversations()
+        if not self.get_initial_conversations():
+            logger.error("初始化会话列表失败")
+            return
         
         while True:
             try:
@@ -673,6 +811,7 @@ class WeChatMonitor:
                 heartbeat_counter += 1
                 if heartbeat_counter % 12 == 0:  # 大约每分钟输出一次
                     logger.info("监控脚本正在运行中...")
+                    self.print_conversation_stats()
                 
                 # 检查会话更新状态
                 self.check_conversation_updates()

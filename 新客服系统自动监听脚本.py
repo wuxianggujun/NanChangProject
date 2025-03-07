@@ -396,15 +396,49 @@ class WeChatMonitor:
                     return title
                     
             # 备用方法：尝试在聊天窗口顶部查找会话名称
-            pane_controls = self.wechat_window.GetChildren(lambda c: c.ControlTypeName == "PaneControl")
-            for pane in pane_controls:
-                # 查找可能包含会话名称的文本控件
-                text_controls = pane.GetChildren(lambda c: c.ControlTypeName == "TextControl")
-                if text_controls and len(text_controls) > 0:
-                    for text in text_controls:
-                        if hasattr(text, "Name") and text.Name and len(text.Name) > 0:
-                            # 通常第一个有文本的控件是会话名称
-                            return text.Name
+            try:
+                # 使用正确的GetChildren方法(不带Lambda)
+                pane_controls = []
+                for control in self.wechat_window.GetChildren():
+                    if control.ControlTypeName == "PaneControl":
+                        pane_controls.append(control)
+                
+                for pane in pane_controls:
+                    # 使用正确的GetChildren方法获取文本控件
+                    text_controls = []
+                    for child in pane.GetChildren():
+                        if child.ControlTypeName == "TextControl":
+                            text_controls.append(child)
+                    
+                    if text_controls:
+                        for text in text_controls:
+                            if hasattr(text, "Name") and text.Name and len(text.Name) > 0:
+                                # 通常第一个有文本的控件是会话名称
+                                return text.Name
+            except Exception as e:
+                logger.warning(f"备用方法获取窗口标题失败: {e}")
+                
+            # 另一个备用方法：搜索当前窗口中的所有EditControl和TextControl
+            try:
+                all_controls = self.wechat_window.GetChildren()
+                for control in all_controls:
+                    # 查找可能显示聊天对象名称的控件
+                    if control.ControlTypeName in ["TextControl", "EditControl"]:
+                        if hasattr(control, "Name") and control.Name:
+                            # 通常会话名称不会太长
+                            if 1 < len(control.Name) < 50:
+                                logger.info(f"可能的聊天窗口标题: {control.Name}")
+                                return control.Name
+                    
+                    # 递归检查子控件
+                    for child in control.GetChildren():
+                        if child.ControlTypeName in ["TextControl", "EditControl"]:
+                            if hasattr(child, "Name") and child.Name:
+                                if 1 < len(child.Name) < 50:
+                                    logger.info(f"可能的聊天窗口标题(子控件): {child.Name}")
+                                    return child.Name
+            except Exception as e:
+                logger.warning(f"另一个备用方法获取窗口标题失败: {e}")
             
             return ""
         except Exception as e:
@@ -428,7 +462,7 @@ class WeChatMonitor:
             logger.info(f"当前聊天窗口标题: {current_title} (尝试 {attempt+1}/{max_attempts})")
             
             # 检查是否与预期名称匹配
-            if expected_name in current_title or current_title == expected_name:
+            if expected_name in current_title or current_title in expected_name:
                 logger.info(f"成功切换到目标会话: {expected_name}")
                 return True
                 
@@ -438,11 +472,29 @@ class WeChatMonitor:
                 # 尽管不完全匹配，但窗口已经切换，我们接受这个结果
                 return True
                 
+            # 备选方法：检查消息列表是否存在
+            try:
+                msg_list = self.wechat_window.ListControl(Name="消息")
+                if msg_list.Exists(1):
+                    logger.info("找到消息列表，会话窗口可能已经切换")
+                    return True
+            except:
+                pass
+                
             # 如果没有变化且尚未达到最大尝试次数，等待一会再次检查
             if attempt < max_attempts - 1:
                 logger.info(f"聊天窗口未切换，等待重试... (预期: {expected_name}, 当前: {current_title})")
                 time.sleep(1.0)
         
+        # 最后的备选验证：即使无法通过标题确认，也检查是否有消息列表出现
+        try:
+            msg_list = self.wechat_window.ListControl(Name="消息")
+            if msg_list.Exists(1):
+                logger.info("找到消息列表，尽管无法确认窗口标题，但会话窗口可能已经切换")
+                return True
+        except:
+            pass
+            
         logger.warning(f"无法确认聊天窗口已切换到目标会话: {expected_name}")
         return False
     
@@ -999,6 +1051,11 @@ class WeChatMonitor:
         try:
             chat_records = []
             
+            # 验证聊天界面是否就绪
+            if not self.verify_chat_content_available():
+                logger.warning("聊天界面未就绪，无法获取聊天记录")
+                return []
+            
             def extract_msg():
                 """提取消息内容"""
                 try:
@@ -1058,8 +1115,8 @@ class WeChatMonitor:
                             name_parts = msg.split(' ')
                             record = {
                                 'type': 'Other',
-                                'name': ''.join(name_parts[:-1]),
-                                'msg': name_parts[-1]
+                                'name': ''.join(name_parts[:-1]) if len(name_parts) > 1 else "Unknown",
+                                'msg': name_parts[-1] if len(name_parts) > 0 else msg
                             }
                             chat_records.append(record)
                             continue
@@ -1078,8 +1135,15 @@ class WeChatMonitor:
                         sender_name = "Unknown"
                         try:
                             # 通常发送者名称在ButtonControl中
-                            if hasattr(msg_node, "ButtonControl") and msg_node.ButtonControl(foundIndex=1).Exists():
-                                sender_name = msg_node.ButtonControl(foundIndex=1).Name
+                            if hasattr(msg_node, "ButtonControl"):
+                                button = None
+                                for child in msg_node.GetChildren():
+                                    if child.ControlTypeName == "ButtonControl":
+                                        button = child
+                                        break
+                                        
+                                if button and hasattr(button, "Name") and button.Name:
+                                    sender_name = button.Name
                         except:
                             pass
                             
@@ -1160,6 +1224,22 @@ class WeChatMonitor:
                 logger.error("无法找到微信窗口")
                 return
             
+            # 尝试找到会话列表
+            if not self.find_conversation_list():
+                logger.error("无法找到会话列表")
+                return
+                
+            # 重新获取当前可见的会话列表
+            visible_conversations = self.get_current_visible_conversations()
+            if not visible_conversations:
+                logger.warning("无法获取可见会话列表")
+                
+            # 创建会话名称到会话项的映射
+            visible_conv_map = {}
+            for conv in visible_conversations:
+                if 'name' in conv and 'item' in conv and conv['item']:
+                    visible_conv_map[conv['name']] = conv['item']
+            
             # 逐个检查会话的聊天记录
             for conv_id, conv in list(self.conversation_dict.items())[:max_count]:
                 try:
@@ -1172,44 +1252,93 @@ class WeChatMonitor:
                         
                     logger.info(f"[{count}/{max_count}] 检查 '{name}' 的聊天记录更新")
                     
-                    # 获取会话项
-                    item = conv.get('item')
-                    if not item or not isinstance(item, auto.Control) or not item.Exists(1):
-                        logger.warning(f"会话项不存在或无效，尝试重新查找...")
-                        
-                        # 尝试刷新会话列表
-                        if not self.find_conversation_list():
-                            logger.error("无法找到会话列表")
-                            continue
+                    # 首先尝试从可见会话中找到匹配的项
+                    item = None
+                    if name in visible_conv_map:
+                        item = visible_conv_map[name]
+                        logger.info(f"从可见会话中找到匹配项: {name}")
+                    else:
+                        # 如果可见会话中没有，尝试使用原始项
+                        item = conv.get('item')
+                        if item and isinstance(item, auto.Control) and item.Exists(1):
+                            logger.info(f"使用原有会话项: {name}")
+                        else:
+                            # 尝试通过滚动查找会话
+                            logger.info(f"会话项不存在或无效，尝试滚动查找: {name}")
                             
-                        # 尝试通过名称查找会话项
-                        found = False
-                        visible_items = self.conversation_list.GetChildren()
-                        for visible_item in visible_items:
-                            if hasattr(visible_item, "Name") and visible_item.Name == name:
-                                item = visible_item
-                                conv['item'] = item  # 更新会话项引用
-                                found = True
-                                logger.info(f"重新找到会话项: {name}")
-                                break
+                            # 先滚动到顶部
+                            self.scroll_conversation_list(direction="up", max_attempts=5)
+                            time.sleep(0.5)
+                            
+                            # 然后向下滚动查找
+                            found = False
+                            for _ in range(10):  # 最多尝试10次滚动
+                                visible_items = self.conversation_list.GetChildren()
+                                for visible_item in visible_items:
+                                    if hasattr(visible_item, "Name") and visible_item.Name == name:
+                                        item = visible_item
+                                        found = True
+                                        logger.info(f"通过滚动找到会话项: {name}")
+                                        break
+                                        
+                                if found:
+                                    break
+                                    
+                                # 没找到，继续向下滚动
+                                if self.scroll_conversation_list(direction="down") == 0:
+                                    # 滚动无效，可能已到底部
+                                    break
+                                    
+                                time.sleep(0.5)
                                 
-                        if not found:
-                            logger.warning(f"无法找到会话项: {name}")
-                            continue
+                            if not found:
+                                logger.warning(f"无法找到会话项: {name}，跳过")
+                                continue
                     
                     # 点击会话打开聊天窗口
                     if not self.click_conversation(item):
-                        logger.warning(f"点击会话 '{name}' 失败或无法确认切换，跳过")
-                        continue
+                        logger.warning(f"点击会话 '{name}' 失败或无法确认切换，尝试备选方案")
+                        
+                        # 尝试备选方案：搜索并点击
+                        try:
+                            # 使用微信的搜索功能
+                            self.wechat_window.SendKeys(text='{Ctrl}F', waitTime=0.5)
+                            time.sleep(0.5)
+                            
+                            # 输入搜索内容
+                            auto.SetClipboardText(text=name)
+                            self.wechat_window.SendKeys(text='{Ctrl}V', waitTime=0.5)
+                            time.sleep(1.0)
+                            
+                            # 尝试点击搜索结果中的第一项
+                            search_list = self.wechat_window.ListControl(foundIndex=2)
+                            if search_list.Exists(1):
+                                search_results = search_list.GetChildren()
+                                if search_results and len(search_results) > 1:  # 第一个通常是搜索框
+                                    for result in search_results[1:]:  # 跳过第一项
+                                        if hasattr(result, "Name") and name in result.Name:
+                                            result.Click()
+                                            logger.info(f"通过搜索点击到会话: {name}")
+                                            time.sleep(1.0)
+                                            
+                                            # 检查是否成功切换
+                                            if self.verify_chat_content_available():
+                                                logger.info("搜索点击成功，找到聊天内容")
+                                                break
+                            
+                            # 取消搜索（按ESC键）
+                            self.wechat_window.SendKeys(text='{Esc}', waitTime=0.5)
+                        except Exception as e:
+                            logger.error(f"搜索点击会话失败: {e}")
+                            continue
                         
                     # 等待聊天窗口加载
                     time.sleep(1.5)
                     
-                    # 获取当前窗口标题，再次确认
-                    current_title = self.get_chat_window_title()
-                    if current_title and name not in current_title and current_title not in name:
-                        logger.warning(f"聊天窗口标题 '{current_title}' 与会话名称 '{name}' 不匹配，可能切换失败")
-                        # 继续尝试获取聊天记录，但记录警告
+                    # 验证是否能找到消息列表
+                    if not self.verify_chat_content_available():
+                        logger.warning(f"无法找到聊天内容，跳过: {name}")
+                        continue
                     
                     # 获取最新聊天记录
                     new_records = self.get_chat_records(page=1)  # 只获取1页，减少滚动次数
@@ -1340,6 +1469,29 @@ class WeChatMonitor:
         merged_records.sort(key=lambda x: x.get('timestamp', '1970-01-01 00:00:00'))
         
         return merged_records
+    
+    def verify_chat_content_available(self):
+        """验证聊天内容是否可用（是否已经切换到聊天界面）
+        
+        Returns:
+            bool: 是否可以获取聊天内容
+        """
+        try:
+            # 检查是否存在消息列表
+            msg_list = self.wechat_window.ListControl(Name="消息")
+            if msg_list.Exists(1):
+                return True
+                
+            # 检查是否有输入框
+            for control in self.wechat_window.GetChildren():
+                if control.ControlTypeName in ["EditControl", "DocumentControl"]:
+                    if hasattr(control, "Name") and "输入" in control.Name:
+                        return True
+                
+            return False
+        except Exception as e:
+            logger.error(f"验证聊天内容时出错: {e}")
+            return False
 
 
 if __name__ == "__main__":

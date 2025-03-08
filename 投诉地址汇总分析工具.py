@@ -145,7 +145,7 @@ class AliyunLLM:
             # 使用超时机制确保请求不会卡住
             stream_response = await asyncio.wait_for(
                 self.client.chat.completions.create(
-                    model="qwq-32b",
+                    model="qwq-plus",
                     messages=[{"role": "user", "content": prompt}],
                     stream=True
                 ),

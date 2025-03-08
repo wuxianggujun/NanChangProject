@@ -1,7 +1,7 @@
 # coding=utf-8
-from aliyun_llm import AliyunLLM
-import pandas as pd
+import polars as pl
 import os
+from aliyun_llm import AliyunLLM
 import time
 from datetime import datetime
 
@@ -17,16 +17,16 @@ class ComplaintAnalyzer:
         if not os.path.exists(self.results_folder):
             os.makedirs(self.results_folder)
     
-    def load_data(self, file_path):
+    def load_data(self, file_path, sheet_name="明细"):
         """加载投诉数据文件"""
         try:
             # 尝试自动检测文件类型并加载
             file_ext = os.path.splitext(file_path)[1].lower()
             
             if file_ext == '.csv':
-                return pd.read_csv(file_path)
+                return pl.read_csv(file_path)
             elif file_ext in ['.xlsx', '.xls']:
-                return pd.read_excel(file_path)
+                return pl.read_excel(file_path, sheet_name=sheet_name)
             else:
                 print(f"不支持的文件格式: {file_ext}")
                 return None
@@ -34,6 +34,159 @@ class ComplaintAnalyzer:
             print(f"加载数据时出错: {e}")
             return None
     
+    def extract_address(self, text):
+        """从文本中提取地址"""
+        if not text or (isinstance(text, str) and text.strip() == "") or pl.Series([text]).is_null().all():
+            return "解析地址失败"
+            
+        prompt = f"""
+只提取文本中明确提及的用户实际位置，忽略基站信息。仅返回地址，无说明。
+注意：如果只提到基站而没有明确用户实际位置，返回"解析地址失败"。
+
+文本: {text}
+
+规则:
+1. 必须明确提及用户在哪里，如"用户在XX宿舍"、"用户所在XX小区"、"客户反映在XX地点"
+2. 如果只有基站名称（如"该处5G基站JJG_SLRN_共青城市南昌工学院F宿"）而没有用户位置，返回"解析地址失败"
+3. 下列情况必须返回"解析地址失败"：
+   - 文本只描述基站位置和负荷情况
+   - 找不到"用户得知"、"用户反映"、"用户所在"等用户位置指示词
+4. 地点必须是用户实际所在地点，而非基站所在地点
+
+例1: "已联系用户，经核查该处5G基站JJG_SLRN_共青城市南昌工学院F宿12#3F弱电间-17[02060787]忙时负荷90%，负荷偏高导致上网慢，建议用户优先..."
+输出: "解析地址失败"
+
+例2: "联系用户得知在共青农大4栋宿舍使用，测试发现用户主占该处JJG_SLRN_共青城市江西农业大学南昌商学院4#学生公寓B栋1F2F-4[020..."
+输出: "共青农大4栋宿舍"
+
+例3: "多次联系用户无人接听，根据用户投诉内容得知在共青农大商学院5G上网较慢，核实发现该处主占的JJG_SLRN_共青城市江西农业大学南昌商学院1#学生公寓宿舍南面3..."
+输出: "共青农大商学院"
+
+例4: "已联系用户，经核查无法明确用户位置，检测发现该处5G基站JJG_SLRN_共青城市南昌工学院F宿12#3F-17信号正常，负荷低，容量充足..."
+输出: "解析地址失败"
+
+例5: "客户反映在向塘镇仁胜新村5栋408室移动网络无法正常使用，用户于1月15日投诉称室内无信号BU6245VL-2[2606064]"
+输出: "向塘镇仁胜新村5栋408室"
+
+如果无法确定用户实际位置，必须返回"解析地址失败"。
+"""
+        # 使用不显示流式输出的方式获取地址
+        try:
+            result = self.llm.chat_without_streaming_display(prompt)
+            # 如果结果不是"解析地址失败"但内容很长，可能是AI添加了额外说明
+            if result and result != "解析地址失败" and len(result) > 100:
+                # 尝试只保留第一行内容
+                first_line = result.strip().split('\n')[0]
+                if len(first_line) < 100:
+                    return first_line
+            return result.strip()
+        except Exception as e:
+            print(f"地址解析出错: {e}")
+            return "解析地址失败"
+    
+    def process_and_extract_addresses(self, data):
+        """处理数据并提取地址，优先从答复口径列提取，失败则从投诉内容列提取"""
+        print(f"开始处理数据并提取地址，共 {data.height} 条记录")
+        
+        # 检查必要的列是否存在
+        columns = data.columns
+        has_reply_column = "答复口径" in columns
+        has_complaint_column = "投诉内容" in columns
+        has_location_column = "投诉位置" in columns
+        
+        if not (has_reply_column or has_complaint_column):
+            print("错误: 数据中既没有'答复口径'列也没有'投诉内容'列，无法提取地址。")
+            return None
+            
+        # 创建结果列表
+        results = []
+        total = data.height
+        processed = 0
+        success_count = 0
+        
+        print(f"\n开始提取地址...")
+        
+        for i, row in enumerate(data.iter_rows(named=True)):
+            print(f"[{i+1}/{total}] 处理记录...")
+            
+            # 获取答复口径和投诉内容
+            reply_text = row.get("答复口径", "") if has_reply_column else ""
+            complaint_text = row.get("投诉内容", "") if has_complaint_column else ""
+            
+            # 首先尝试从答复口径中提取地址
+            address = "解析地址失败"
+            source = "无"
+            
+            if reply_text and str(reply_text).strip():
+                print(f"尝试从答复口径提取地址: {str(reply_text)[:80]}..." if len(str(reply_text)) > 80 else str(reply_text))
+                address = self.extract_address(reply_text)
+                source = "答复口径"
+            
+            # 如果答复口径提取失败，再尝试从投诉内容提取
+            if address == "解析地址失败" and complaint_text and str(complaint_text).strip():
+                print(f"答复口径提取失败，尝试从投诉内容提取: {str(complaint_text)[:80]}..." if len(str(complaint_text)) > 80 else str(complaint_text))
+                address = self.extract_address(complaint_text)
+                source = "投诉内容"
+            
+            processed += 1
+            if address != "解析地址失败":
+                success_count += 1
+                print(f"✓ 从{source}中提取到地址: {address}")
+            else:
+                print(f"✗ 地址提取失败")
+            
+            # 创建结果记录，复制所有原始列
+            result_row = {}
+            for key, value in row.items():
+                result_row[key] = value
+            
+            # 添加新的列
+            result_row["提取的地址"] = address
+            result_row["地址来源"] = source
+            
+            # 更新投诉位置列
+            if has_location_column and address != "解析地址失败":
+                result_row["投诉位置"] = address
+            
+            results.append(result_row)
+            
+            # 每10条保存一次中间结果
+            if (i+1) % 10 == 0:
+                self._save_interim_results(results, "addresses")
+                
+            # 避免API请求过快
+            time.sleep(0.5)
+        
+        # 保存最终结果
+        if results:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_file = f"{self.results_folder}/地址解析结果_{timestamp}.csv"
+            updated_file = f"{self.results_folder}/更新后投诉明细_{timestamp}.xlsx"
+            
+            try:
+                # 将结果转换为polars DataFrame
+                df = pl.DataFrame(results)
+                # 保存为CSV，不使用encoding参数
+                df.write_csv(output_file)
+                print(f"\n完整结果已保存至: {output_file}")
+                
+                # 保存为Excel，方便导入原系统
+                df.write_excel(updated_file)
+                print(f"更新后的完整数据已保存至: {updated_file}")
+                
+                # 输出处理统计信息
+                if processed > 0:
+                    success_rate = (success_count / processed) * 100
+                    print(f"\n处理统计:")
+                    print(f"总记录数: {total}")
+                    print(f"处理记录数: {processed}")
+                    print(f"成功提取地址数: {success_count}")
+                    print(f"地址提取成功率: {success_rate:.2f}%")
+            except Exception as e:
+                print(f"保存结果时出错: {e}")
+        
+        return results
+
     def analyze_complaint_text(self, text):
         """分析单条投诉文本"""
         prompt = f"""
@@ -53,166 +206,54 @@ class ComplaintAnalyzer:
         # 使用不显示流式输出的方式获取分析结果
         return self.llm.chat_without_streaming_display(prompt)
     
-    def analyze_complaint_batch(self, complaints_data, text_column, 
-                               limit=None, output_format='csv'):
-        """批量分析投诉文本"""
-        if complaints_data is None or len(complaints_data) == 0:
-            print("没有数据可供分析")
-            return
-        
-        print(f"开始批量分析投诉数据，共 {len(complaints_data)} 条记录")
-        if limit:
-            print(f"已设置分析上限: {limit} 条")
-            complaints_data = complaints_data.head(limit)
-        
-        # 创建结果数据框
-        results = []
-        
-        # 开始分析
-        total = len(complaints_data)
-        for i, row in enumerate(complaints_data.itertuples(), 1):
-            complaint_text = getattr(row, text_column) if hasattr(row, text_column) else "无内容"
-            
-            print(f"\n[{i}/{total}] 正在分析投诉...")
-            
-            # 跳过空内容
-            if pd.isna(complaint_text) or str(complaint_text).strip() == "":
-                print("跳过空内容")
-                continue
-                
-            try:
-                # 分析投诉内容
-                analysis = self.llm.chat_without_streaming_display(
-                    f"分析这条客户投诉并提取关键信息:\n\n{complaint_text}\n\n" +
-                    "请提供JSON格式的分析结果，包含以下字段：" +
-                    "投诉类型，主要问题，情感倾向，严重程度，建议处理方案"
-                )
-                
-                # 创建结果记录
-                result_row = {col: getattr(row, col) for col in complaints_data.columns}
-                result_row["AI分析结果"] = analysis
-                results.append(result_row)
-                
-                # 每5条保存一次中间结果
-                if i % 5 == 0:
-                    self._save_interim_results(results, output_format)
-                    
-                # 避免API请求过快
-                time.sleep(1)
-                
-            except Exception as e:
-                print(f"分析第 {i} 条记录时出错: {e}")
-        
-        # 保存最终结果
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{self.results_folder}/投诉分析结果_{timestamp}"
-        
-        if output_format == 'csv':
-            pd.DataFrame(results).to_csv(f"{filename}.csv", index=False, encoding='utf-8-sig')
-        else:
-            pd.DataFrame(results).to_excel(f"{filename}.xlsx", index=False)
-            
-        print(f"\n分析完成! 结果已保存至: {filename}.{output_format}")
-        return results
-    
-    def _save_interim_results(self, results, output_format):
+    def _save_interim_results(self, results, result_type="analysis"):
         """保存中间结果"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        interim_file = f"{self.results_folder}/中间结果_{timestamp}"
         
-        if output_format == 'csv':
-            pd.DataFrame(results).to_csv(f"{interim_file}.csv", index=False, encoding='utf-8-sig')
+        if result_type == "addresses":
+            interim_file = f"{self.results_folder}/地址解析_中间结果_{timestamp}.csv"
         else:
-            pd.DataFrame(results).to_excel(f"{interim_file}.xlsx", index=False)
-    
-    def generate_summary_report(self, analyzed_data):
-        """生成总结报告"""
-        if not analyzed_data or len(analyzed_data) == 0:
-            print("没有数据可供生成报告")
-            return ""
-            
-        all_analysis = "\n".join([row.get("AI分析结果", "") for row in analyzed_data if "AI分析结果" in row])
+            interim_file = f"{self.results_folder}/投诉分析_中间结果_{timestamp}.csv"
         
-        prompt = f"""
-我有一批客户投诉数据的AI分析结果，请基于这些分析生成一份总结报告。
-
-以下是部分分析结果样本:
-{all_analysis[:3000]}  # 限制提示长度
-
-请生成一份包含以下内容的总结报告:
-1. 投诉热点分析 - 最常见的投诉类型和问题
-2. 问题趋势 - 是否有明显的投诉模式或趋势
-3. 严重程度分析 - 各级别投诉的分布情况
-4. 改进建议 - 基于分析结果提出的具体改进措施
-5. 执行摘要 - 对所有发现的简明总结
-
-请尽可能具体和有操作性，以便管理层可以制定相应的改进计划。
-"""
-        print("\n正在生成总结报告...")
-        report = self.llm.chat_without_streaming_display(prompt)
-        
-        # 保存报告
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        report_file = f"{self.results_folder}/投诉总结报告_{timestamp}.txt"
-        
-        with open(report_file, "w", encoding="utf-8") as f:
-            f.write(report)
-            
-        print(f"报告已生成并保存至: {report_file}")
-        return report
+        try:
+            # 将结果转换为polars DataFrame
+            df = pl.DataFrame(results)
+            # 保存为CSV，不使用encoding参数
+            df.write_csv(interim_file)
+            print(f"已保存中间结果至: {interim_file}")
+        except Exception as e:
+            print(f"保存中间结果时出错: {e}")
 
 
 def main():
+    # 默认参数和文件路径
+    file_path = "WorkDocument/投诉热点明细分析/source/202403-202502投诉热点明细表-终稿.xlsx"
+    sheet_name = "明细"
+    
     print("=" * 50)
-    print("投诉热点明细AI分析工具")
+    print("投诉热点明细地址自动提取工具")
     print("=" * 50)
-    print("\n本工具使用阿里云大模型API分析客户投诉数据，提取关键信息并生成分析报告。")
+    print(f"默认文件路径: {file_path}")
+    print(f"默认工作表: {sheet_name}")
     
     # 创建分析器实例
     analyzer = ComplaintAnalyzer()
     
-    # 询问用户输入
-    data_path = input("\n请输入投诉数据文件路径 (Excel或CSV格式): ")
-    
-    # 尝试加载数据
-    data = analyzer.load_data(data_path)
+    # 加载数据
+    print(f"\n正在读取Excel文件...")
+    data = analyzer.load_data(file_path, sheet_name)
     
     if data is None:
         print("无法加载数据，程序退出。")
         return
-        
-    # 显示数据概览
-    print(f"\n成功加载数据，共 {len(data)} 条记录")
-    print("\n数据前5行预览:")
-    print(data.head())
     
-    # 让用户选择文本列
-    print("\n可用列:")
-    for i, col in enumerate(data.columns):
-        print(f"{i+1}. {col}")
-        
-    col_idx = int(input("\n请选择包含投诉内容的列编号: ")) - 1
-    text_column = data.columns[col_idx]
+    print(f"\n成功加载数据，共 {data.height} 条记录")
     
-    # 询问分析数量
-    limit_input = input("\n要分析的记录数量 (直接回车表示全部): ")
-    limit = int(limit_input) if limit_input.strip() else None
+    # 直接执行地址提取
+    print("\n开始执行地址提取...")
+    analyzer.process_and_extract_addresses(data)
     
-    # 询问输出格式
-    output_format = input("\n输出格式 (csv/xlsx, 默认csv): ").lower() or 'csv'
-    if output_format not in ['csv', 'xlsx']:
-        output_format = 'csv'
-    
-    # 执行批量分析
-    results = analyzer.analyze_complaint_batch(data, text_column, limit, output_format)
-    
-    # 询问是否生成总结报告
-    if results:
-        generate_report = input("\n是否生成总结报告? (y/n): ").lower() == 'y'
-        if generate_report:
-            analyzer.generate_summary_report(results)
-    
-    print("\n分析完成！")
+    print("\n处理完成！")
 
 
 if __name__ == "__main__":

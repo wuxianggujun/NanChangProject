@@ -1,16 +1,74 @@
 # coding=utf-8
 import polars as pl
 import os
-from aliyun_llm import AliyunLLM
+from openai import AsyncOpenAI
+import asyncio
 import time
 from datetime import datetime
+import platform
+import json
+
+class AsyncAliyunLLM:
+    """阿里云大语言模型异步API封装类"""
+    
+    def __init__(self, api_key=None):
+        """初始化异步API客户端"""
+        # 优先使用传入的API密钥，否则尝试从环境变量获取
+        self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY", "sk-c8464e16fdc844fd8ca1399062d3c1d7")
+        self.base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        
+        # 初始化异步客户端
+        self.client = AsyncOpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url
+        )
+    
+    async def chat_async(self, prompt, model="qwq-32b", system_prompt=None):
+        """异步调用模型，使用流式处理"""
+        # 构建消息列表
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        
+        try:
+            # 使用流式模式调用API
+            stream_response = await self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                stream=True  # 启用流式模式
+            )
+            
+            # 收集流式响应
+            collected_content = ""
+            reasoning_content = ""
+            
+            async for chunk in stream_response:
+                # 处理流式响应的每个块
+                if chunk.choices and len(chunk.choices) > 0:
+                    delta = chunk.choices[0].delta
+                    
+                    # 处理思考过程（如果有）
+                    if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
+                        reasoning_content += delta.reasoning_content
+                    
+                    # 处理实际内容
+                    if delta.content:
+                        collected_content += delta.content
+            
+            # 返回收集到的完整内容
+            return collected_content.strip()
+            
+        except Exception as e:
+            print(f"API调用错误: {str(e)}")
+            raise e
 
 class ComplaintAnalyzer:
     """投诉热点明细AI分析工具"""
     
     def __init__(self, api_key=None):
         """初始化分析器"""
-        self.llm = AliyunLLM(api_key=api_key)
+        self.llm = AsyncAliyunLLM(api_key=api_key)
         self.results_folder = "分析结果"
         
         # 创建结果文件夹（如果不存在）
@@ -34,8 +92,8 @@ class ComplaintAnalyzer:
             print(f"加载数据时出错: {e}")
             return None
     
-    def extract_address(self, text):
-        """从文本中提取地址"""
+    async def extract_address_async(self, text):
+        """从文本中异步提取地址"""
         if not text or (isinstance(text, str) and text.strip() == "") or pl.Series([text]).is_null().all():
             return "解析地址失败"
             
@@ -46,12 +104,15 @@ class ComplaintAnalyzer:
 文本: {text}
 
 规则:
-1. 必须明确提及用户在哪里，如"用户在XX宿舍"、"用户所在XX小区"、"客户反映在XX地点"
-2. 如果只有基站名称（如"该处5G基站JJG_SLRN_共青城市南昌工学院F宿"）而没有用户位置，返回"解析地址失败"
-3. 下列情况必须返回"解析地址失败"：
+1. 必须明确提及用户在哪里，如"用户在XX地点"、"用户所在XX区域"、"客户反映在XX地点"
+2. 如果有冒号，如"用户反映在青山湖区:南池路"，去除冒号并连接，输出为"青山湖区南池路"
+3. 如果有中括号【】，请忽略中括号内的内容，只保留中括号前的地址
+4. 如果只有基站名称而没有用户位置，返回"解析地址失败"
+5. 下列情况必须返回"解析地址失败"：
    - 文本只描述基站位置和负荷情况
    - 找不到"用户得知"、"用户反映"、"用户所在"等用户位置指示词
-4. 地点必须是用户实际所在地点，而非基站所在地点
+6. 地点必须是用户实际所在地点，而非基站所在地点
+7. 对于路口位置格式，保持"路名/路名(路口)"的格式
 
 例1: "已联系用户，经核查该处5G基站JJG_SLRN_共青城市南昌工学院F宿12#3F弱电间-17[02060787]忙时负荷90%，负荷偏高导致上网慢，建议用户优先..."
 输出: "解析地址失败"
@@ -62,17 +123,26 @@ class ComplaintAnalyzer:
 例3: "多次联系用户无人接听，根据用户投诉内容得知在共青农大商学院5G上网较慢，核实发现该处主占的JJG_SLRN_共青城市江西农业大学南昌商学院1#学生公寓宿舍南面3..."
 输出: "共青农大商学院"
 
-例4: "已联系用户，经核查无法明确用户位置，检测发现该处5G基站JJG_SLRN_共青城市南昌工学院F宿12#3F-17信号正常，负荷低，容量充足..."
-输出: "解析地址失败"
+例4: "用户反映在青山湖区:南池路/顺外路(路口)上网卡顿，核查用户主占5GNCH_WLRN_青云谱区华福制衣搬迁-3[01038154]忙时PRB利用率80%"
+输出: "青山湖区南池路/顺外路(路口)"
 
 例5: "客户反映在向塘镇仁胜新村5栋408室移动网络无法正常使用，用户于1月15日投诉称室内无信号BU6245VL-2[2606064]"
 输出: "向塘镇仁胜新村5栋408室"
 
+例6: "用户反应:江西理工大学莲花五栋，测试发现用户主使用NCH_SLRN_南昌市江西理工莲花五栋楼-1[02060771]小区"
+输出: "江西理工大学莲花五栋"
+
+例7: "投诉内容:江西航空职业技术学院(经开校区)-南门【江西省南昌市新建区建业大街与车塘湖路交汇处】，测试结果正常"
+输出: "江西航空职业技术学院(经开校区)-南门"
+
+例8: "用户投诉青山湖区南京东路【江西财经大学对面】经常无信号"
+输出: "青山湖区南京东路"
+
 如果无法确定用户实际位置，必须返回"解析地址失败"。
 """
-        # 使用不显示流式输出的方式获取地址
+        # 异步调用LLM模型
         try:
-            result = self.llm.chat_without_streaming_display(prompt)
+            result = await self.llm.chat_async(prompt)
             # 如果结果不是"解析地址失败"但内容很长，可能是AI添加了额外说明
             if result and result != "解析地址失败" and len(result) > 100:
                 # 尝试只保留第一行内容
@@ -84,8 +154,47 @@ class ComplaintAnalyzer:
             print(f"地址解析出错: {e}")
             return "解析地址失败"
     
-    def process_and_extract_addresses(self, data):
-        """处理数据并提取地址，优先从答复口径列提取，失败则从投诉内容列提取"""
+    async def process_record_async(self, row, has_reply_column, has_complaint_column, index, total):
+        """异步处理单条记录"""
+        print(f"[{index+1}/{total}] 处理记录...")
+        
+        # 获取答复口径和投诉内容
+        reply_text = row.get("答复口径", "") if has_reply_column else ""
+        complaint_text = row.get("投诉内容", "") if has_complaint_column else ""
+        
+        # 首先尝试从答复口径中提取地址
+        address = "解析地址失败"
+        source = "无"
+        
+        if reply_text and str(reply_text).strip():
+            print(f"尝试从答复口径提取地址: {str(reply_text)[:80]}..." if len(str(reply_text)) > 80 else str(reply_text))
+            address = await self.extract_address_async(reply_text)
+            source = "答复口径"
+        
+        # 如果答复口径提取失败，再尝试从投诉内容提取
+        if address == "解析地址失败" and complaint_text and str(complaint_text).strip():
+            print(f"答复口径提取失败，尝试从投诉内容提取: {str(complaint_text)[:80]}..." if len(str(complaint_text)) > 80 else str(complaint_text))
+            address = await self.extract_address_async(complaint_text)
+            source = "投诉内容"
+        
+        if address != "解析地址失败":
+            print(f"✓ 从{source}中提取到地址: {address}")
+        else:
+            print(f"✗ 地址提取失败")
+        
+        # 创建结果记录，复制所有原始列
+        result_row = {}
+        for key, value in row.items():
+            result_row[key] = value
+        
+        # 添加新的列
+        result_row["提取的地址"] = address
+        result_row["地址来源"] = source
+        
+        return result_row, (address != "解析地址失败")
+    
+    async def process_and_extract_addresses_async(self, data, batch_size=20):
+        """异步处理数据并提取地址，优先从答复口径列提取，失败则从投诉内容列提取"""
         print(f"开始处理数据并提取地址，共 {data.height} 条记录")
         
         # 检查必要的列是否存在
@@ -106,56 +215,52 @@ class ComplaintAnalyzer:
         
         print(f"\n开始提取地址...")
         
-        for i, row in enumerate(data.iter_rows(named=True)):
-            print(f"[{i+1}/{total}] 处理记录...")
+        # 按批次处理数据
+        all_rows = list(data.iter_rows(named=True))
+        for i in range(0, len(all_rows), batch_size):
+            batch = all_rows[i:i+batch_size]
+            batch_tasks = []
             
-            # 获取答复口径和投诉内容
-            reply_text = row.get("答复口径", "") if has_reply_column else ""
-            complaint_text = row.get("投诉内容", "") if has_complaint_column else ""
+            # 创建批处理任务
+            for j, row in enumerate(batch):
+                task = self.process_record_async(
+                    row, has_reply_column, has_complaint_column, i+j, total
+                )
+                batch_tasks.append(task)
             
-            # 首先尝试从答复口径中提取地址
-            address = "解析地址失败"
-            source = "无"
+            # 异步执行批处理任务
+            batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
             
-            if reply_text and str(reply_text).strip():
-                print(f"尝试从答复口径提取地址: {str(reply_text)[:80]}..." if len(str(reply_text)) > 80 else str(reply_text))
-                address = self.extract_address(reply_text)
-                source = "答复口径"
-            
-            # 如果答复口径提取失败，再尝试从投诉内容提取
-            if address == "解析地址失败" and complaint_text and str(complaint_text).strip():
-                print(f"答复口径提取失败，尝试从投诉内容提取: {str(complaint_text)[:80]}..." if len(str(complaint_text)) > 80 else str(complaint_text))
-                address = self.extract_address(complaint_text)
-                source = "投诉内容"
-            
-            processed += 1
-            if address != "解析地址失败":
-                success_count += 1
-                print(f"✓ 从{source}中提取到地址: {address}")
-            else:
-                print(f"✗ 地址提取失败")
-            
-            # 创建结果记录，复制所有原始列
-            result_row = {}
-            for key, value in row.items():
-                result_row[key] = value
-            
-            # 添加新的列
-            result_row["提取的地址"] = address
-            result_row["地址来源"] = source
-            
-            # 更新投诉位置列
-            if has_location_column and address != "解析地址失败":
-                result_row["投诉位置"] = address
-            
-            results.append(result_row)
-            
-            # 每10条保存一次中间结果
-            if (i+1) % 10 == 0:
-                self._save_interim_results(results, "addresses")
+            # 处理结果
+            for j, result in enumerate(batch_results):
+                # 处理异常情况
+                if isinstance(result, Exception):
+                    print(f"处理第 {i+j+1} 条记录时出错: {result}")
+                    result_row = {key: value for key, value in batch[j].items()}
+                    result_row["提取的地址"] = "解析地址失败"
+                    result_row["地址来源"] = "处理出错"
+                    results.append(result_row)
+                    processed += 1
+                    continue
+                    
+                # 正常处理
+                result_row, is_success = result
+                results.append(result_row)
+                processed += 1
+                if is_success:
+                    success_count += 1
                 
-            # 避免API请求过快
-            time.sleep(0.5)
+                # 更新投诉位置列
+                if has_location_column and result_row["提取的地址"] != "解析地址失败":
+                    result_row["投诉位置"] = result_row["提取的地址"]
+            
+            # 每批次保存一次中间结果
+            self._save_interim_results(results, "addresses")
+            success_rate = (success_count/processed*100) if processed > 0 else 0
+            print(f"已完成 {processed}/{total} 条记录处理，成功率: {success_rate:.2f}%")
+            
+            # 短暂暂停，避免过快请求
+            await asyncio.sleep(1)
         
         # 保存最终结果
         if results:
@@ -186,25 +291,6 @@ class ComplaintAnalyzer:
                 print(f"保存结果时出错: {e}")
         
         return results
-
-    def analyze_complaint_text(self, text):
-        """分析单条投诉文本"""
-        prompt = f"""
-请作为专业的客户投诉分析师，对以下投诉内容进行详细分析：
-
-投诉内容: {text}
-
-请提供以下分析结果:
-1. 投诉类型和主要问题点
-2. 投诉原因分析
-3. 情感倾向判断（正面/负面/中性）
-4. 投诉严重程度评估（低/中/高）
-5. 建议的处理方案
-
-请确保分析客观、专业且有实用价值。
-"""
-        # 使用不显示流式输出的方式获取分析结果
-        return self.llm.chat_without_streaming_display(prompt)
     
     def _save_interim_results(self, results, result_type="analysis"):
         """保存中间结果"""
@@ -225,13 +311,14 @@ class ComplaintAnalyzer:
             print(f"保存中间结果时出错: {e}")
 
 
-def main():
+async def main_async():
+    """异步主函数"""
     # 默认参数和文件路径
     file_path = "WorkDocument/投诉热点明细分析/source/202403-202502投诉热点明细表-终稿.xlsx"
     sheet_name = "明细"
     
     print("=" * 50)
-    print("投诉热点明细地址自动提取工具")
+    print("投诉热点明细地址自动提取工具 (异步版)")
     print("=" * 50)
     print(f"默认文件路径: {file_path}")
     print(f"默认工作表: {sheet_name}")
@@ -249,11 +336,25 @@ def main():
     
     print(f"\n成功加载数据，共 {data.height} 条记录")
     
+    # 批量大小设置
+    batch_size = 20  # 增加到20条/批次
+    print(f"设置批量处理大小: {batch_size}条记录/批次")
+    
     # 直接执行地址提取
     print("\n开始执行地址提取...")
-    analyzer.process_and_extract_addresses(data)
+    await analyzer.process_and_extract_addresses_async(data, batch_size)
     
     print("\n处理完成！")
+
+
+def main():
+    """同步入口函数"""
+    # 设置事件循环策略（在Windows上需要）
+    if platform.system() == 'Windows':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    
+    # 运行异步主函数
+    asyncio.run(main_async())
 
 
 if __name__ == "__main__":

@@ -26,6 +26,23 @@ class AliyunLLM:
             base_url=self.base_url
         )
     
+    def normalize_address(self, address):
+        """规范化地址，去除不必要的后缀和突兀的表达"""
+        if not address:
+            return address
+            
+        # 去除结尾的"内"字
+        if address.endswith("内"):
+            address = address[:-1]
+            
+        # 去除其他一些可能突兀的结尾
+        unwanted_suffixes = ["中", "处", "边", "旁", "附近", "左右", "上"]
+        for suffix in unwanted_suffixes:
+            if address.endswith(suffix):
+                address = address[:-len(suffix)]
+                
+        return address
+    
     async def analyze_top_addresses(self, address_info, timeout=30):
         """分析地址列表，找出最多3个最常见/最具代表性的地址
         
@@ -43,27 +60,62 @@ class AliyunLLM:
         else:
             address_list = address_info
             
-        # 如果只有1-3个不同的地址，直接返回
+        # 统计地址出现次数
+        counter = Counter(address_list)
+        
+        # 如果只有1-3个不同的地址，按频率排序返回
         unique_addresses = set(address_list)
         if len(unique_addresses) <= 3:
-            return list(unique_addresses)
+            return [self.normalize_address(addr) for addr, _ in counter.most_common()]
+            
+        # 预处理：如果有出现次数明显高于其他地址的地址（超过1次），只选择这些高频地址
+        multi_addrs = [addr for addr, count in counter.most_common() if count > 1]
+        
+        # 如果有2个或以上的多次出现地址，就不再考虑只出现一次的地址
+        if len(multi_addrs) >= 2:
+            # 只使用AI分析多次出现的地址
+            counter_multi = {addr: count for addr, count in counter.items() if count > 1}
+            sorted_addrs = sorted(counter_multi.items(), key=lambda x: x[1], reverse=True)
+            
+            # 如果只有2-3个多次出现的地址，直接返回这些地址（按频率排序）
+            if len(sorted_addrs) <= 3:
+                return [self.normalize_address(addr) for addr, _ in sorted_addrs]
+            
+            # 仅讨论多次出现的地址
+            address_list_for_ai = []
+            for addr, count in sorted_addrs:
+                address_list_for_ai.extend([addr] * count)
+                
+            # 更新计数器
+            counter = Counter(address_list_for_ai)
         
         # 使用AI分析
         prompt = f"""
-分析以下包含重复的地址列表，按照如下规则选择最多3个地址：
+这是一组投诉地址，你需要识别出最常见的地址，并严格按照以下规则输出结果：
 
-1. 识别出现频率最高的地址（注意：有些地址可能是相同位置的不同表达方式，如"江西理工大学"和"理工大学"实际指同一地点）
-2. 优先选择出现次数最多的地址，按照频率从高到低排序
-3. 如果有多个地址表示同一位置，选择描述最详细准确的一个
-4. 详细的判断标准：
-   - 最优先：具体到某栋楼、某个宿舍、某个门牌号的地址（例如"共青城江西农业大学南昌商学院1#学生公寓"）
-   - 其次：具体到学校、医院等设施的地址（例如"江西理工大学"）
-   - 最后：只提到城市、区域的地址（例如"青山湖区"）
+规则1：必须严格按照地址出现次数从高到低排序，次数最多的排第一位
+规则2：如果有2个或以上地址出现次数大于1次，就完全不要包含只出现1次的地址
+规则3：【重要】避免输出冗余地址，即如果已经包含了详细地址，就不要再包含它的简略版本
+     例如：如果有"共青农大商学院16栋"，就不要再包含"共青农大商学院"
+规则4：对于相似的地址，合并计算它们的出现频率，并选择描述最详细的一个作为代表
+规则5：【重要】规范化地址表达，去掉突兀的结尾词，如"内"、"中"等
+     例如：应该用"共青工业职业学院宿舍"而不是"共青工业职业学院宿舍内"
 
-所有地址列表（包含重复）：
-{', '.join(address_list)}
+具体例子：
+1. 对于"共青现代职业学院宿舍内(出现30次)、江西省九江市共青城市江西现代职业技术学院共青产教融合基地(出现1次)、共青工业职业学院宿舍内(出现4次)"
+   应该只输出"共青现代职业学院宿舍"和"共青工业职业学院宿舍"，完全不要包含只出现1次的地址，并且去掉结尾的"内"字
 
-请直接返回1-3个最具代表性的地址，每行一个地址，不要有任何解释或额外文字。这些地址最终会用顿号"、"连接起来作为最终结果。
+2. 对于"共青农大商学院16栋(出现8次)、共青农大商学院(出现5次)、共青应用技术师范学院内(出现4次)"
+   应该只输出"共青农大商学院16栋"和"共青应用技术师范学院"，不要输出"共青农大商学院"，因为它是前者的简略版本，并且去掉"内"字
+
+3. 如果"南昌大学"出现5次，"南昌大学前湖校区"出现3次，你应该只输出更详细的"南昌大学前湖校区"，
+   并将这两个地址的出现次数合并计算，视为共出现8次
+
+原始地址列表（按出现次数排序）：
+{', '.join([f"{addr} (出现{count}次)" for addr, count in counter.most_common()])}
+
+请按出现频率从高到低返回最多3个代表性地址（每行一个）。避免输出冗余地址，去掉结尾的"内"等突兀词语，绝对不要包含只出现一次的地址（除非没有任何地址出现超过一次）。
+不要输出任何解释、出现次数或其他额外文字。
 """
         try:
             # 使用超时机制确保请求不会卡住
@@ -86,23 +138,91 @@ class AliyunLLM:
             addresses = []
             for line in result.strip().split('\n'):
                 line = line.strip()
+                # 去除可能的频率信息
+                line = re.sub(r'\s*\(出现\d+次\)\s*', '', line)
                 if line and len(addresses) < 3:
                     # 检查是否AI已经使用了顿号分隔
                     if "、" in line and len(addresses) == 0:
-                        return line.split("、")[:3]
+                        addresses = [re.sub(r'\s*\(出现\d+次\)\s*', '', addr.strip()) for addr in line.split("、")][:3]
+                        break
                     addresses.append(line)
             
-            # 如果AI没有返回任何有效地址，则使用频率排序
-            if not addresses:
-                counter = Counter(address_list)
-                return [addr for addr, _ in counter.most_common(3)]
-                
-            return addresses
+            # 规范化地址
+            addresses = [self.normalize_address(addr) for addr in addresses]
             
+            # 验证地址是否有冗余（简略版本和详细版本同时存在）
+            if len(addresses) > 1:
+                # 去除冗余地址
+                non_redundant = []
+                for i, addr1 in enumerate(addresses):
+                    is_redundant = False
+                    for j, addr2 in enumerate(addresses):
+                        if i != j and addr1 in addr2:  # addr1是addr2的子串，表示addr1是简略版本
+                            is_redundant = True
+                            break
+                    if not is_redundant:
+                        non_redundant.append(addr1)
+                
+                # 如果发现并移除了冗余地址，更新结果
+                if len(non_redundant) < len(addresses):
+                    addresses = non_redundant
+            
+            # 验证AI输出的地址是否符合要求
+            if addresses:
+                # 如果有多次出现的地址，检查AI是否输出了只出现一次的地址
+                if len(multi_addrs) >= 2:
+                    # 先规范化multi_addrs列表
+                    normalized_multi_addrs = [self.normalize_address(addr) for addr in multi_addrs]
+                    # 检查AI输出的地址是否在规范化后的多次出现地址列表中
+                    filtered_addresses = []
+                    for addr in addresses:
+                        # 检查规范化后的地址是否匹配
+                        is_high_freq = addr in normalized_multi_addrs
+                        # 如果不匹配，检查原始地址是否匹配
+                        if not is_high_freq:
+                            for m_addr in multi_addrs:
+                                if self.normalize_address(m_addr) == addr:
+                                    is_high_freq = True
+                                    break
+                        if is_high_freq:
+                            filtered_addresses.append(addr)
+                    
+                    # 如果过滤后还有地址，使用过滤后的结果
+                    if filtered_addresses:
+                        return filtered_addresses[:3]
+                    
+                # 检查是否所有地址都是低频地址
+                all_low_freq = True
+                for addr in addresses:
+                    # 检查规范化前后的地址是否为高频地址
+                    is_high_freq = False
+                    for orig_addr, count in counter.items():
+                        if count > 1 and (addr == orig_addr or addr == self.normalize_address(orig_addr)):
+                            is_high_freq = True
+                            break
+                    if is_high_freq:
+                        all_low_freq = False
+                        break
+                
+                if all_low_freq and multi_addrs:
+                    # 如果AI返回的全是低频地址，但实际有高频地址，则使用高频地址
+                    return [self.normalize_address(addr) for addr in multi_addrs[:3]]
+                    
+                return addresses[:3]
+            
+            # 如果AI没有返回任何有效地址，则使用频率排序
+            # 优先选择出现次数大于1的地址
+            if multi_addrs:
+                return [self.normalize_address(addr) for addr in multi_addrs[:3]]
+            else:
+                return [self.normalize_address(addr) for addr, _ in counter.most_common(3)]
+                
         except Exception as e:
-            # 出错时使用频率排序
-            counter = Counter(address_list)
-            return [addr for addr, _ in counter.most_common(3)]
+            # 出错时使用频率排序，优先选择出现次数大于1的地址
+            if multi_addrs:
+                return [self.normalize_address(addr) for addr in multi_addrs[:3]]
+            else:
+                return [self.normalize_address(addr) for addr, _ in counter.most_common(3)]
 
 class ComplaintAddressProcessor:
     """投诉地址处理工具"""
@@ -173,7 +293,16 @@ class ComplaintAddressProcessor:
                 if complaint_id in id_address_map and id_address_map[complaint_id]:
                     # 使用频率统计
                     counter = Counter(id_address_map[complaint_id])
-                    results[complaint_id] = [addr for addr, _ in counter.most_common(3)]
+                    # 优先选择多次出现的地址
+                    multi_addrs = [addr for addr, count in counter.most_common() if count > 1]
+                    if len(multi_addrs) >= 2:
+                        results[complaint_id] = multi_addrs[:3]
+                    elif multi_addrs:
+                        # 如果只有一个多次出现的地址，也只返回这一个
+                        results[complaint_id] = multi_addrs
+                    else:
+                        # 如果没有多次出现的地址，返回频率最高的最多3个
+                        results[complaint_id] = [addr for addr, _ in counter.most_common(3)]
                 else:
                     results[complaint_id] = ["处理失败"]
             
@@ -191,7 +320,16 @@ class ComplaintAddressProcessor:
         except Exception as e:
             # 使用频率统计
             counter = Counter(address_list)
-            return complaint_id, [addr for addr, _ in counter.most_common(3)]
+            # 优先选择多次出现的地址
+            multi_addrs = [addr for addr, count in counter.most_common() if count > 1]
+            if len(multi_addrs) >= 2:
+                return complaint_id, multi_addrs[:3]
+            elif multi_addrs:
+                # 如果只有一个多次出现的地址，也只返回这一个
+                return complaint_id, multi_addrs
+            else:
+                # 如果没有多次出现的地址，返回频率最高的最多3个
+                return complaint_id, [addr for addr, _ in counter.most_common(3)]
     
     async def process_by_identifier(self, df, id_column="投诉标识", address_column="投诉位置", batch_size=20):
         """按投诉标识分组，处理地址并添加最终投诉位置"""

@@ -37,217 +37,88 @@ class AliyunLLM:
             if address.endswith(suffix):
                 address = address[:-len(suffix)]
                 
+        # 去除开头的行政区划（省、市、区、县等）
+        address = re.sub(r'^(江西省|江西|南昌市|南昌|九江市|九江|赣州市|赣州|上饶市|上饶|吉安市|吉安|抚州市|抚州|宜春市|宜春|景德镇市|景德镇|萍乡市|萍乡|新余市|新余|鹰潭市|鹰潭)?\s*', '', address)
+        address = re.sub(r'^([\w]+(?:省|市|区|县|镇|乡))\s*', '', address)
+        
         # 清理额外空格
         address = re.sub(r'\s+', '', address)
         
         return address
     
-    async def analyze_top_addresses(self, address_info, timeout=30):
-        """分析地址列表，找出最多3个最常见/最具代表性的地址
-        
-        参数:
-            address_info: 一个列表，包含所有地址（可能有重复的地址）
-        """
-        if not address_info:
+    async def analyze_addresses(self, address_list, timeout=30):
+        """分析地址列表，找出最多3个最常见/最具代表性的地址"""
+        if not address_list:
             return ["无有效地址"]
-            
-        if isinstance(address_info, dict):
-            # 如果是字典格式，转换为列表（每个地址重复出现的次数等于其值）
-            address_list = []
-            for addr, count in address_info.items():
-                address_list.extend([addr] * count)
-        else:
-            address_list = address_info
-            
-        # 统计地址出现次数
+        
+        # 准备原始地址列表和频率统计
         counter = Counter(address_list)
         
-        # 如果只有1-3个不同的地址，按频率排序返回
-        unique_addresses = set(address_list)
-        if len(unique_addresses) <= 3:
-            return [self.normalize_address(addr) for addr, _ in counter.most_common()]
-            
-        # 预处理：如果有出现次数明显高于其他地址的地址（超过1次），只选择这些高频地址
-        multi_addrs = [addr for addr, count in counter.most_common() if count > 1]
+        # 打印原始地址列表
+        print("\n==================== 原始地址列表 ====================")
+        for addr, count in counter.most_common():
+            print(f"  {addr} (出现{count}次)")
         
-        # 如果有2个或以上的多次出现地址，就不再考虑只出现一次的地址
-        if len(multi_addrs) >= 2:
-            # 只使用AI分析多次出现的地址
-            counter_multi = {addr: count for addr, count in counter.items() if count > 1}
-            sorted_addrs = sorted(counter_multi.items(), key=lambda x: x[1], reverse=True)
-            
-            # 如果只有2-3个多次出现的地址，直接返回这些地址（按频率排序）
-            if len(sorted_addrs) <= 3:
-                return [self.normalize_address(addr) for addr, _ in sorted_addrs]
-            
-            # 仅讨论多次出现的地址
-            address_list_for_ai = []
-            for addr, count in sorted_addrs:
-                address_list_for_ai.extend([addr] * count)
-                
-            # 更新计数器
-            counter = Counter(address_list_for_ai)
-        
-        # 使用AI分析
+        # 使用AI进行分析
         prompt = f"""
-请分析投诉地址数据，严格按以下规则输出最合适的地址：
+请全面分析以下投诉地址列表，完成以下任务：
 
-# 核心处理规则
-1. **去行政区划**：
-   - 只保留具体点位名称（如"农大商学院16栋"，而非"江西省南昌市农大商学院16栋"）
-   - 自动剥离省/市/区等上级地名（即使原始地址包含）
-   - 此步骤非常重要且复杂，需要理解上下文，判断哪些是行政区划，哪些是具体地点名称
+1. 识别相似地址并合并统计频率（如"南昌大学"与"南昌大学前湖校区"视为相似地址）
+2. 对相似地址群组，选择最详细的一个地址作为代表（如"南昌大学前湖校区"优于"南昌大学"）
+3. 剔除行政区划和结尾方位词（如去掉"江西省南昌市"的前缀和"内"等后缀）
+4. 按合并后的频率从高到低选择最多3个最具代表性的地址
 
-2. **相似地址合并**：
-   - 层级递进合并：当同时存在父级和子级地址时，仅保留最详细版本并叠加次数
-     例："南昌大学(5次)+南昌大学前湖校区(3次)" → 保留后者，总次数8次
-   - 严禁同时输出父级和子级地址
+过滤规则：
+- 当有≥2个地址出现≥2次时，完全剔除仅出现1次的地址
+- 当某地址是另一地址的简略形式时，只保留详细版本并合并次数
 
-3. **精简标准**：
-   - 必须删除结尾方位词（内/中/里等）
-   - 保留最小完整单元：需能独立标识位置
-     有效："工业园3号楼"、"职业学院宿舍"
-     无效："工业园"（过于宽泛）
-
-# 过滤机制
-1. **次数过滤**：
-   - 当存在≥2个地址出现≥2次时，完全剔除单次地址
-   - 所有地址均为单次时，才允许输出单次地址
-
-2. **冗余过滤**：
-   - 若某地址是其他地址的父级，则剔除该父级地址
-     当存在"农大商学院16栋"时，自动过滤"农大商学院"
-
-# 示例处理
-1. 示例一：
-   输入："江西省九江市共青城市农大商学院16栋(8次)、农大商学院(5次)"
-   输出："农大商学院16栋"（合并次数13次，剥离行政区划，过滤父级地址）
-
-2. 示例二：
-   输入："共青现代职业学院宿舍内(30次)、江西省九江市共青城市江西现代职业技术学院共青产教融合基地(1次)、共青工业职业学院宿舍内(4次)"
-   输出："现代职业学院宿舍"、"工业职业学院宿舍"（剥离行政区划和"内"字，过滤低频地址）
-
-3. 示例三：
-   输入："科技园内(3次)、朝阳科技园B栋(2次)"
-   输出："朝阳科技园B栋"（剥离"内"字，父级"科技园"被过滤，因为B栋更具体）
-
-原始地址列表（按出现次数排序）：
+原始投诉地址列表（已标注原始出现次数）：
 {', '.join([f"{addr} (出现{count}次)" for addr, count in counter.most_common()])}
 
-请理解每个地址的上下文，按合并后的次数从高到低输出最多3个标准化地址（每行一个，无需包含任何解释或次数信息）。
-输出要点：
-- 删除行政区划和结尾方位词
-- 合并相似地址并累加次数
-- 当有≥2个地址出现≥2次时，完全不输出单次地址
-- 避免输出冗余地址（父级地址）
+请输出最多3个最终代表性地址，每行一个，无需包含次数或解释。
+输出的地址必须已去除行政区划和方位词。
 """
-        try:
-            # 使用超时机制确保请求不会卡住
-            stream_response = await asyncio.wait_for(
-                self.client.chat.completions.create(
-                    model="qwq-plus",
-                    messages=[{"role": "user", "content": prompt}],
-                    stream=True
-                ),
-                timeout=timeout
-            )
-            
-            # 收集内容
-            result = ""
-            async for chunk in stream_response:
-                if chunk.choices and len(chunk.choices) > 0 and chunk.choices[0].delta.content:
-                    result += chunk.choices[0].delta.content
-            
-            # 处理结果，返回最多3个地址
-            addresses = []
-            for line in result.strip().split('\n'):
-                line = line.strip()
-                # 去除可能的频率信息
-                line = re.sub(r'\s*\(出现\d+次\)\s*', '', line)
-                line = re.sub(r'^\d+[\.\s、]+', '', line)  # 移除可能的序号
-                if line and len(addresses) < 3:
-                    # 检查是否AI已经使用了顿号分隔
-                    if "、" in line and len(addresses) == 0:
-                        addresses = [re.sub(r'\s*\(出现\d+次\)\s*', '', addr.strip()) for addr in line.split("、")][:3]
-                        break
-                    addresses.append(line)
-            
-            # 只进行方位词的规范化，行政区划处理完全交给AI
-            addresses = [self.normalize_address(addr) for addr in addresses]
-            
-            # 验证地址是否有冗余（简略版本和详细版本同时存在）
-            if len(addresses) > 1:
-                # 去除冗余地址
-                non_redundant = []
-                for i, addr1 in enumerate(addresses):
-                    is_redundant = False
-                    for j, addr2 in enumerate(addresses):
-                        if i != j and addr1 in addr2:  # addr1是addr2的子串，表示addr1是简略版本
-                            is_redundant = True
-                            break
-                    if not is_redundant:
-                        non_redundant.append(addr1)
-                
-                # 如果发现并移除了冗余地址，更新结果
-                if len(non_redundant) < len(addresses):
-                    addresses = non_redundant
-            
-            # 验证AI输出的地址是否符合要求
-            if addresses:
-                # 如果有多次出现的地址，检查AI是否输出了只出现一次的地址
-                if len(multi_addrs) >= 2:
-                    # 先规范化multi_addrs列表
-                    normalized_multi_addrs = [self.normalize_address(addr) for addr in multi_addrs]
-                    # 检查AI输出的地址是否在规范化后的多次出现地址列表中
-                    filtered_addresses = []
-                    for addr in addresses:
-                        # 检查规范化后的地址是否匹配
-                        is_high_freq = addr in normalized_multi_addrs
-                        # 如果不匹配，检查原始地址是否匹配
-                        if not is_high_freq:
-                            for m_addr in multi_addrs:
-                                if self.normalize_address(m_addr) == addr:
-                                    is_high_freq = True
-                                    break
-                        if is_high_freq:
-                            filtered_addresses.append(addr)
-                    
-                    # 如果过滤后还有地址，使用过滤后的结果
-                    if filtered_addresses:
-                        return filtered_addresses[:3]
-                    
-                # 检查是否所有地址都是低频地址
-                all_low_freq = True
-                for addr in addresses:
-                    # 检查规范化前后的地址是否为高频地址
-                    is_high_freq = False
-                    for orig_addr, count in counter.items():
-                        if count > 1 and (addr == orig_addr or addr == self.normalize_address(orig_addr)):
-                            is_high_freq = True
-                            break
-                    if is_high_freq:
-                        all_low_freq = False
-                        break
-                
-                if all_low_freq and multi_addrs:
-                    # 如果AI返回的全是低频地址，但实际有高频地址，则使用高频地址
-                    return [self.normalize_address(addr) for addr in multi_addrs[:3]]
-                    
-                return addresses[:3]
-            
-            # 如果AI没有返回任何有效地址，则使用频率排序
-            # 优先选择出现次数大于1的地址
-            if multi_addrs:
-                return [self.normalize_address(addr) for addr in multi_addrs[:3]]
-            else:
-                return [self.normalize_address(addr) for addr, _ in counter.most_common(3)]
-                
-        except Exception as e:
-            # 出错时使用频率排序，优先选择出现次数大于1的地址
-            if multi_addrs:
-                return [self.normalize_address(addr) for addr in multi_addrs[:3]]
-            else:
-                return [self.normalize_address(addr) for addr, _ in counter.most_common(3)]
+        # 使用超时机制确保请求不会卡住
+        stream_response = await asyncio.wait_for(
+            self.client.chat.completions.create(
+                model="qwq-32b",
+                messages=[{"role": "user", "content": prompt}],
+                stream=True
+            ),
+            timeout=timeout
+        )
+        
+        # 收集内容
+        result = ""
+        async for chunk in stream_response:
+            if chunk.choices and len(chunk.choices) > 0 and chunk.choices[0].delta.content:
+                result += chunk.choices[0].delta.content
+        
+        # 打印AI回复的完整内容
+        print("\n==================== AI回复内容 ====================")
+        print(result.strip())
+        
+        # 处理结果，返回最多3个地址
+        addresses = []
+        for line in result.strip().split('\n'):
+            line = line.strip()
+            # 去除可能的频率信息和序号
+            line = re.sub(r'\s*\(出现\d+次\)\s*', '', line)
+            line = re.sub(r'^\d+[\.\s、]+', '', line)  # 移除可能的序号
+            if line and len(addresses) < 3:
+                # 检查是否AI已经使用了顿号分隔
+                if "、" in line and len(addresses) == 0:
+                    addresses = [re.sub(r'\s*\(出现\d+次\)\s*', '', addr.strip()) for addr in line.split("、")][:3]
+                    break
+                addresses.append(line)
+        
+        # 打印最终选择的结果
+        print("\n==================== 最终选择结果 ====================")
+        for addr in addresses[:3]:
+            print(f"  {addr}")
+        print("============================================================\n")
+        
+        return addresses[:3]
 
 class ComplaintAddressProcessor:
     """投诉地址处理工具"""
@@ -306,30 +177,8 @@ class ComplaintAddressProcessor:
             
         # 使用as_completed并行执行任务，可以立即处理完成的任务
         for task in asyncio.as_completed(tasks):
-            try:
-                complaint_id, result = await task
-                results[complaint_id] = result
-            except Exception as e:
-                # 如果任务失败，找出是哪个ID
-                task_id = id(task)
-                complaint_id = task_map.get(task_id, "未知ID")
-                
-                # 为失败的任务设置默认值
-                if complaint_id in id_address_map and id_address_map[complaint_id]:
-                    # 使用频率统计
-                    counter = Counter(id_address_map[complaint_id])
-                    # 优先选择多次出现的地址
-                    multi_addrs = [addr for addr, count in counter.most_common() if count > 1]
-                    if len(multi_addrs) >= 2:
-                        results[complaint_id] = multi_addrs[:3]
-                    elif multi_addrs:
-                        # 如果只有一个多次出现的地址，也只返回这一个
-                        results[complaint_id] = multi_addrs
-                    else:
-                        # 如果没有多次出现的地址，返回频率最高的最多3个
-                        results[complaint_id] = [addr for addr, _ in counter.most_common(3)]
-                else:
-                    results[complaint_id] = ["处理失败"]
+            complaint_id, result = await task
+            results[complaint_id] = result
             
             # 每完成一个任务就更新进度
             if progress:
@@ -339,22 +188,9 @@ class ComplaintAddressProcessor:
     
     async def _analyze_address_task(self, complaint_id, address_list):
         """单个地址分析任务"""
-        try:
-            top_addresses = await self.ai.analyze_top_addresses(address_list)
-            return complaint_id, top_addresses
-        except Exception as e:
-            # 使用频率统计
-            counter = Counter(address_list)
-            # 优先选择多次出现的地址
-            multi_addrs = [addr for addr, count in counter.most_common() if count > 1]
-            if len(multi_addrs) >= 2:
-                return complaint_id, multi_addrs[:3]
-            elif multi_addrs:
-                # 如果只有一个多次出现的地址，也只返回这一个
-                return complaint_id, multi_addrs
-            else:
-                # 如果没有多次出现的地址，返回频率最高的最多3个
-                return complaint_id, [addr for addr, _ in counter.most_common(3)]
+        print(f"\n处理投诉标识编号: {complaint_id} ====================")
+        top_addresses = await self.ai.analyze_addresses(address_list)
+        return complaint_id, top_addresses
     
     async def process_by_identifier(self, df, id_column="投诉标识", address_column="投诉位置", batch_size=20):
         """按投诉标识分组，处理地址并添加最终投诉位置"""
@@ -395,14 +231,12 @@ class ComplaintAddressProcessor:
         # 构建ID-地址映射，保留全部地址（不去重）
         print("构建地址映射...")
         id_address_map = {}
-        address_count_map = {}
         
         for complaint_id in id_list:
             # 获取该编号的所有地址（不去重）
             addresses = valid_records.filter(pl.col("complaint_id") == complaint_id).get_column(address_column).to_list()
             # 保存完整地址列表（不去重）
             id_address_map[complaint_id] = addresses
-            address_count_map[complaint_id] = len(addresses)
         
         # 批量处理地址
         print("\n开始AI分析地址...")
@@ -422,7 +256,7 @@ class ComplaintAddressProcessor:
             # 只在每5个批次后保存一次中间结果，减少输出干扰
             if (i // batch_size) % 5 == 4:
                 self._save_interim_results(top_addresses_dict, id_list[:i+len(batch_ids)], 
-                                        df, id_column, id_address_map, address_count_map, silent=True)
+                                        df, id_column, id_address_map, silent=True)
         
         progress_bar.close()
         
@@ -476,17 +310,34 @@ class ComplaintAddressProcessor:
                 # 获取该编号的所有地址（原始列表）
                 addresses = id_address_map.get(complaint_id, [])
                 
-                # 统计重复出现的地址
-                address_counter = Counter(addresses)
-                
                 # 获取AI分析的代表性地址
                 top_addresses = top_addresses_dict[complaint_id]
+                
+                # 统计原始频率（仅用于显示）
+                raw_counter = Counter(addresses)
                 
                 # 添加频率信息
                 freq_info = []
                 for addr in top_addresses:
-                    count = address_counter.get(addr, 0)
-                    freq_info.append(f"{addr}(出现{count}次)")
+                    # 尝试找到相似的原始地址及其频率
+                    norm_addr = self.ai.normalize_address(addr)
+                    total_count = 0
+                    for orig_addr, count in raw_counter.items():
+                        # 规范化原始地址
+                        norm_orig = self.ai.normalize_address(orig_addr)
+                        # 如果规范化后地址相似，累加次数
+                        if norm_addr == norm_orig or norm_addr in norm_orig or norm_orig in norm_addr:
+                            total_count += count
+                    
+                    if total_count > 0:
+                        freq_info.append(f"{addr}(出现{total_count}次)")
+                    else:
+                        # 尝试直接匹配
+                        direct_count = sum(1 for orig_addr in addresses if addr in orig_addr or orig_addr in addr)
+                        if direct_count > 0:
+                            freq_info.append(f"{addr}(出现{direct_count}次)")
+                        else:
+                            freq_info.append(f"{addr}")  # 不显示次数
                 
                 summary_data.append({
                     "投诉标识": original_id,
@@ -499,7 +350,7 @@ class ComplaintAddressProcessor:
         
         return results, pl.DataFrame(summary_data)
     
-    def _save_interim_results(self, top_addresses_dict, processed_ids, df, id_column, id_address_map, address_count_map, silent=False):
+    def _save_interim_results(self, top_addresses_dict, processed_ids, df, id_column, id_address_map, silent=False):
         """保存中间结果，防止长时间处理中断导致全部丢失"""
         try:
             # 创建中间汇总表
@@ -512,9 +363,6 @@ class ComplaintAddressProcessor:
                     
                     # 获取该编号的所有地址（原始列表）
                     addresses = id_address_map.get(complaint_id, [])
-                    
-                    # 统计重复出现的地址
-                    address_counter = Counter(addresses)
                     
                     # 获取AI分析的代表性地址
                     top_addresses = top_addresses_dict[complaint_id]
@@ -594,6 +442,8 @@ async def main_process():
     print("\n说明:")
     print("1. 更新后明细表: 包含所有原始记录，并在投诉标识列旁添加了'最终投诉位置'列")
     print("2. 地址汇总分析表: 汇总了每个投诉标识的地址信息，包含AI分析出的代表性地址")
+    print("   - AI识别并合并了相似地址，计算总频率")
+    print("   - 按合并后的频率从高到低排序，并去除冗余地址")
     print("这些文件保存在'处理结果'文件夹中，可以直接打开查看和使用。")
     
     # 计算执行时间
